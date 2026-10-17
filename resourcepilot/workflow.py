@@ -15,8 +15,10 @@ from uuid import uuid4
 from resourcepilot.clock import later, parse, utc_now
 from resourcepilot.config import SPECIALIST_CHAIN, env_int
 from resourcepilot.intake import intake_handler
+from resourcepilot.logistics import analysis_handler
 from resourcepilot.models import TaskRequest, TaskResult
 from resourcepilot.store import DurableStore
+from resourcepilot.vetting import verification_handler
 
 Handler = Callable[[dict[str, Any], dict[str, Any]], dict[str, Any]]
 
@@ -58,6 +60,8 @@ def task_result(task: TaskRequest, role: str, *, ok: bool, **fields: Any) -> Tas
 
 HANDLERS: dict[str, Handler] = {
     "intake": lambda payload, context: intake_handler(payload),
+    "verification": verification_handler,
+    "analysis": analysis_handler,
 }
 
 

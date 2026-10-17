@@ -98,6 +98,14 @@ resource_hold_spec = ProtocolSpecification(
 )
 
 
+def quote_subtotal_cents(offer: dict[str, Any], quantity: int, hours: float) -> int:
+    """ResourceHold pricing rule: hourly items scale with hours, other items with quantity."""
+    unit = int(offer["unit_price_cents"])
+    if offer["unit"] == "hour":
+        return round(unit * hours * quantity)
+    return unit * quantity
+
+
 def seller_protocol_digest() -> str:
     """Digest a seller publishes; Discovery searches the Almanac for it."""
     return str(resource_hold_spec.manifest(role="seller")["metadata"]["digest"])

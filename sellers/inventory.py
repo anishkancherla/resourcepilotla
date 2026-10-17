@@ -18,6 +18,7 @@ from resourcepilot.protocols import (
     HoldRejected,
     HoldRequest,
     QuoteRequest,
+    quote_subtotal_cents,
 )
 from resourcepilot.registry import SellerListing
 from resourcepilot.store import DurableStore
@@ -34,13 +35,6 @@ def load_catalog(seller_id: str) -> tuple[dict[str, Any], ...]:
 
 def catalog_item(seller_id: str, item_id: str) -> dict[str, Any] | None:
     return next((dict(i) for i in load_catalog(seller_id) if i["item_id"] == item_id), None)
-
-
-def price_cents(item: dict[str, Any], quantity: int, hours: float) -> int:
-    unit = int(item["unit_price_cents"])
-    if item["unit"] == "hour":
-        return round(unit * hours * quantity)
-    return unit * quantity
 
 
 def within_opening_hours(listing: SellerListing, start: str, end: str) -> bool:
@@ -89,7 +83,7 @@ async def build_offers(
                 "seller_id": listing.seller_id,
                 "quantity": quantity,
                 "hours": round(hours, 2),
-                "subtotal_cents": price_cents(item, quantity, hours),
+                "subtotal_cents": quote_subtotal_cents(item, quantity, hours),
                 "available": not reason,
                 "unavailable_reason": reason,
             }
@@ -121,7 +115,7 @@ async def place_hold(
     if not within_opening_hours(listing, request.window_start, request.window_end):
         return reject("Outside opening hours")
     hours = hours_between(request.window_start, request.window_end)
-    subtotal = price_cents(item, request.quantity, hours)
+    subtotal = quote_subtotal_cents(item, request.quantity, hours)
     expires_at = later(ttl_seconds, now=parse(now))
     status = await store.place_hold(
         {

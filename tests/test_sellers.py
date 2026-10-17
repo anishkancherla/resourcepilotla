@@ -14,6 +14,7 @@ from resourcepilot.protocols import (
     HoldRejected,
     HoldRequest,
     QuoteRequest,
+    quote_subtotal_cents,
     resource_hold_spec,
     seller_protocol_digest,
 )
@@ -25,7 +26,6 @@ from sellers.inventory import (
     confirmation_code,
     load_catalog,
     place_hold,
-    price_cents,
     resolve_fault_mode,
     within_opening_hours,
 )
@@ -96,8 +96,8 @@ def test_seller_protocol_digest_matches_published_role() -> None:
 def test_hourly_and_per_item_pricing() -> None:
     dslr = next(i for i in load_catalog("gear_share") if i["item_id"] == "dslr_kit")
     poster = load_catalog("westwood_print")[0]
-    assert price_cents(dslr, 1, 3) == 900
-    assert price_cents(poster, 20, 3) == 1100
+    assert quote_subtotal_cents(dslr, 1, 3) == 900
+    assert quote_subtotal_cents(poster, 20, 3) == 1100
 
 
 def test_opening_hours_use_campus_time() -> None:
