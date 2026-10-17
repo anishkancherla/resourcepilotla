@@ -31,6 +31,12 @@ packages = ["agents", "resourcepilot", "sellers"]
 asyncio_mode = "auto"
 testpaths = ["tests"]
 addopts = "-q"
+pythonpath = ["tests"]
+filterwarnings = [
+  # Loading a runtime module includes protocols with publish_manifest=True outside a running
+  # agent loop; the manifest coroutine is intentionally never scheduled in tests.
+  "ignore:coroutine 'Agent.publish_manifest' was never awaited:RuntimeWarning",
+]
 
 [tool.ruff]
 line-length = 100

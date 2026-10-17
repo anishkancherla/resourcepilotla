@@ -239,12 +239,20 @@ def build_brief(request: dict[str, Any], *, now: datetime | None = None) -> dict
     }
 
 
+SAVED_PREFERENCES = ("priority", "anchor", "has_training")
+
+
 def intake_handler(payload: dict[str, Any]) -> dict[str, Any]:
     now = parse(str(payload["now"])) if payload.get("now") else None
     if isinstance(payload.get("fields"), dict):
         request = from_form(dict(payload["fields"]))
     else:
         request = parse_request_text(str(payload.get("text", "")), now=now)
+        # A sentence rarely restates preferences, so fall back to the saved ones.
+        saved = dict(payload.get("saved_preferences") or {})
+        for key in SAVED_PREFERENCES:
+            if key not in request and key in saved:
+                request[key] = saved[key]
     return {"brief": build_brief(request, now=now)}
 
 

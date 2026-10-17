@@ -43,3 +43,25 @@ def registry_env(monkeypatch: pytest.MonkeyPatch) -> dict[str, str]:
         monkeypatch.setenv(seller.address_env, addresses[seller.key])
         monkeypatch.setenv(seller.wallet_env, f"fetch1{seller.key.replace('_', '')}")
     return addresses
+
+
+@pytest.fixture(scope="session")
+def network_env() -> dict[str, str]:
+    from network import build_env
+
+    return build_env()
+
+
+@pytest.fixture(scope="session")
+def network_modules(network_env: dict[str, str]):
+    from network import load_modules
+
+    return load_modules(network_env)
+
+
+@pytest.fixture
+def network(monkeypatch: pytest.MonkeyPatch, network_env: dict[str, str], network_modules):
+    from network import agent_network
+
+    with agent_network(monkeypatch, network_env, network_modules) as running:
+        yield running
