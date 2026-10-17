@@ -12,6 +12,7 @@ from datetime import datetime
 from typing import Any
 from uuid import uuid4
 
+from resourcepilot.bundles import planner_handler
 from resourcepilot.clock import later, parse, utc_now
 from resourcepilot.config import SPECIALIST_CHAIN, env_int
 from resourcepilot.intake import intake_handler
@@ -62,6 +63,7 @@ HANDLERS: dict[str, Handler] = {
     "intake": lambda payload, context: intake_handler(payload),
     "verification": verification_handler,
     "analysis": analysis_handler,
+    "planner": planner_handler,
 }
 
 

@@ -4,13 +4,18 @@
     "category": "camera",
     "name": "DSLR camera kit with 24-70mm lens",
     "unit": "hour",
-    "unit_price_cents": 300,
+    "unit_price_cents": 250,
     "capacity": 2,
     "ready_in_hours": 0,
     "deposit_cents": 5000,
     "requires_training": true,
     "rating": 4.8,
-    "tags": ["dslr", "camera", "photo", "video"],
+    "tags": [
+      "dslr",
+      "camera",
+      "photo",
+      "video"
+    ],
     "policy": "Requires completed gear-share training. Refundable $50 deposit at pickup."
   },
   {
@@ -18,13 +23,18 @@
     "category": "camera",
     "name": "Mirrorless camera kit",
     "unit": "hour",
-    "unit_price_cents": 350,
+    "unit_price_cents": 300,
     "capacity": 2,
     "ready_in_hours": 0,
     "deposit_cents": 4000,
     "requires_training": false,
     "rating": 4.5,
-    "tags": ["mirrorless", "camera", "photo", "video"],
+    "tags": [
+      "mirrorless",
+      "camera",
+      "photo",
+      "video"
+    ],
     "policy": "No training required. Refundable $40 deposit at pickup."
   },
   {
@@ -38,7 +48,11 @@
     "deposit_cents": 0,
     "requires_training": false,
     "rating": 4.3,
-    "tags": ["microphone", "audio", "podcast"],
+    "tags": [
+      "microphone",
+      "audio",
+      "podcast"
+    ],
     "policy": "Return within 15 minutes of the booking end."
   },
   {
@@ -52,7 +66,10 @@
     "deposit_cents": 0,
     "requires_training": false,
     "rating": 4.2,
-    "tags": ["tripod", "video"],
+    "tags": [
+      "tripod",
+      "video"
+    ],
     "policy": "Return within 15 minutes of the booking end."
   }
 ]
