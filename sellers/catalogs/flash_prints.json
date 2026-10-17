@@ -1,0 +1,16 @@
+[
+  {
+    "item_id": "poster_color_any",
+    "category": "posters",
+    "name": "Color poster, any size",
+    "unit": "item",
+    "unit_price_cents": 30,
+    "capacity": 1000,
+    "ready_in_hours": 1,
+    "deposit_cents": 0,
+    "requires_training": false,
+    "rating": 3.1,
+    "tags": ["color", "poster"],
+    "policy": "Pickup location shared after payment."
+  }
+]
