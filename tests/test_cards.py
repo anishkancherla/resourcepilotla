@@ -7,6 +7,7 @@ from helpers import NOW, brief
 from uagents_core.contrib.protocols.chat import MetadataContent, TextContent
 
 from resourcepilot import cards
+from resourcepilot.clock import later
 from resourcepilot.intake import upcoming_days
 
 BUNDLE = {
@@ -17,6 +18,7 @@ BUNDLE = {
             "category": "camera",
             "seller_id": "gear_share",
             "seller_name": "Campus Gear Share",
+            "item_id": "mirrorless_kit",
             "name": "Mirrorless camera kit",
             "subtotal_cents": 900,
             "policy": "No training required.",
@@ -30,6 +32,20 @@ BUNDLE = {
     "deposit_cents": 4000,
     "substitutions": ["Mirrorless camera kit instead of a DSLR"],
 }
+BOOKINGS = [
+    {
+        "hold_id": "hold_1",
+        "seller_id": "gear_share",
+        "item_id": "mirrorless_kit",
+        "confirmation_code": "GS-ABC123",
+    }
+]
+LEDGER = [
+    {"kind": "payout", "party": "gear_share", "amount": "9.00", "currency": "USD",
+     "status": "simulated"},
+    {"kind": "fee", "party": "resourcepilot", "amount": "0.57", "currency": "USD",
+     "status": "retained"},
+]  # fmt: skip
 REJECTIONS = [
     {
         "seller_id": "flash_prints",
@@ -52,6 +68,12 @@ FACTORIES = [
     (lambda: cards.bundle_carousel("workflow-1", [BUNDLE], 3), "carousel"),
     (lambda: cards.bundle_detail("workflow-1", brief(), BUNDLE, checkout=True), "detail"),
     (lambda: cards.vetting_card("workflow-1", REJECTIONS), "detail"),
+    (lambda: cards.holds_review_card("workflow-1", brief(), BUNDLE, later(600)), "review"),
+    (lambda: cards.payment_options_card("workflow-1", 957, "0.000095"), "custom"),
+    (
+        lambda: cards.receipt_card(brief(), BUNDLE, BOOKINGS, {"currency": "USD"}, LEDGER),
+        "detail",
+    ),
     (lambda: cards.bookings_card([]), "detail"),
     (lambda: cards.error_card("Something failed"), "custom"),
     (lambda: cards.status_card("Planner", "Builds bundles", "agent1qorch"), "custom"),
@@ -149,3 +171,27 @@ def test_custom_card_depth_limit() -> None:
         cards.card_message("bad", "custom", {"root": {"children": []}})
     with pytest.raises(ValueError, match="unsupported"):
         cards.card_message("bad", "table", {})
+
+
+def test_checkout_cards_carry_ids_and_honest_payment_labels() -> None:
+    _, review = cards.holds_review_card("workflow-1", brief(), BUNDLE, later(600))
+    assert review["approve_cta"]["selection"] == {
+        "action": "choose_payment",
+        "workflow_id": "workflow-1",
+    }
+    assert review["reject_cta"]["selection"]["action"] == "release_holds"
+    assert "No money moves until you pay" in json.dumps(review)
+
+    _, options = cards.payment_options_card("workflow-1", 957, None)
+    methods = [
+        child["action"]["selection"].get("payment_method")
+        for child in options["root"]["children"]
+        if child["type"] == "button"
+    ]
+    assert methods == ["stripe_mock", None]  # no FET button when FET is not configured
+    assert "no money moves" in json.dumps(options)
+
+    _, receipt = cards.receipt_card(brief(), BUNDLE, BOOKINGS, {"currency": "USD"}, LEDGER)
+    text = json.dumps(receipt)
+    assert "GS-ABC123" in text
+    assert "Mock Stripe (no money moved)" in text

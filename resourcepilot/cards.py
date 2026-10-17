@@ -8,6 +8,8 @@ from uuid import uuid4
 
 from uagents_core.contrib.protocols.chat import ChatMessage, MetadataContent, TextContent
 
+from resourcepilot.clock import CAMPUS_TZ, parse
+from resourcepilot.escrow import note_for, rail_label
 from resourcepilot.intake import ANCHORS, PRIORITIES, describe_window
 from resourcepilot.pricing import usd
 from resourcepilot.registry import CATEGORIES
@@ -384,6 +386,142 @@ def bundle_detail(
         for line in bundle["lines"]
     )
     return "detail", {"title": bundle["label"], "summary_rows": rows, "ctas": ctas}
+
+
+def _local_time(value: str) -> str:
+    return f"{parse(value).astimezone(CAMPUS_TZ):%-I:%M %p}"
+
+
+def holds_review_card(
+    workflow_id: str, brief: dict[str, Any], bundle: dict[str, Any], holds_expire_at: str
+) -> tuple[str, dict[str, Any]]:
+    rows = bundle_rows(brief, bundle)
+    rows.extend(
+        [
+            {
+                "label": "Holds",
+                "value": (
+                    f"All {bundle['seller_count']} sellers are holding your items until "
+                    f"{_local_time(holds_expire_at)}"
+                ),
+            },
+            {
+                "label": "Payment",
+                "value": (
+                    "No money moves until you pay. Your payment sits in escrow, and sellers "
+                    "are paid only after every booking commits."
+                ),
+            },
+        ]
+    )
+    return "review", {
+        "title": "Everything is on hold",
+        "summary_rows": rows,
+        "approve_cta": {
+            "label": "Choose payment",
+            "primary": True,
+            "selection": {"action": "choose_payment", "workflow_id": workflow_id},
+        },
+        "reject_cta": {
+            "label": "Release holds",
+            "selection": {"action": "release_holds", "workflow_id": workflow_id},
+        },
+    }
+
+
+def payment_options_card(
+    workflow_id: str, total_cents: int, fet_amount: str | None
+) -> tuple[str, dict[str, Any]]:
+    children: list[dict[str, Any]] = [
+        {"type": "heading", "value": f"Total {usd(total_cents)}", "level": 2},
+        {
+            "type": "text",
+            "value": "Mock Stripe is a simulation: no Stripe API call and no money moves.",
+            "style": "body",
+        },
+        _button(
+            "Mock Stripe",
+            {"action": "pay", "workflow_id": workflow_id, "payment_method": "stripe_mock"},
+            primary=True,
+        ),
+    ]
+    if fet_amount:
+        children.extend(
+            [
+                {
+                    "type": "text",
+                    "value": (
+                        f"Or pay {fet_amount} faucet-issued test FET on Fetch stable-testnet. "
+                        "The Orchestrator verifies the transaction on chain."
+                    ),
+                    "style": "body",
+                },
+                _button(
+                    "Pay test FET",
+                    {"action": "pay", "workflow_id": workflow_id, "payment_method": "fet_direct"},
+                ),
+            ]
+        )
+    children.append(
+        _button("Release holds", {"action": "release_holds", "workflow_id": workflow_id})
+    )
+    return "custom", {
+        "root": {"type": "section", "title": "Pay ResourcePilot escrow", "children": children}
+    }
+
+
+def receipt_card(
+    brief: dict[str, Any],
+    bundle: dict[str, Any],
+    bookings: list[dict[str, Any]],
+    payment: dict[str, Any],
+    ledger: list[dict[str, Any]],
+) -> tuple[str, dict[str, Any]]:
+    names = {line["seller_id"]: line["seller_name"] for line in bundle["lines"]}
+    lines = {line["seller_id"] + ":" + line["item_id"]: line for line in bundle["lines"]}
+    rows = []
+    for booking in bookings:
+        line = lines.get(f"{booking['seller_id']}:{booking['item_id']}", {})
+        rows.append(
+            {
+                "label": f"{CATEGORIES.get(line.get('category', ''), 'Item')} · "
+                f"{names.get(booking['seller_id'], booking['seller_id'])}",
+                "value": f"{line.get('name', booking['item_id'])}: {booking['confirmation_code']}",
+            }
+        )
+    rows.extend(
+        [
+            {"label": "When", "value": describe_window(brief)},
+            {
+                "label": "Paid",
+                "value": f"{usd(bundle['total_cents'])} via {rail_label(payment['currency'])}",
+            },
+        ]
+    )
+    for entry in ledger:
+        label = (
+            "Booking fee · ResourcePilot"
+            if entry["kind"] == "fee"
+            else f"{entry['kind'].title()} · {names.get(entry['party'], 'Buyer')}"
+        )
+        rows.append(
+            {
+                "label": label,
+                "value": f"{entry['amount']} {entry['currency']}: {note_for(entry)}",
+            }
+        )
+    if bundle["deposit_cents"]:
+        rows.append(
+            {"label": "Deposits", "value": "Refundable deposits are paid to sellers at pickup"}
+        )
+    return "detail", {
+        "title": f"Booked with {bundle['seller_count']} sellers",
+        "summary_rows": rows,
+        "ctas": [
+            {"label": "My bookings", "primary": True, "selection": {"action": "show_bookings"}},
+            {"label": "New request", "selection": {"action": "start_over"}},
+        ],
+    }
 
 
 VETTING_STAGES = {

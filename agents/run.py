@@ -2,7 +2,9 @@
 
 Every role is its own process, seed, address, and profile. The Orchestrator delegates with
 ``ctx.send``; specialists reply with correlated TaskResults. Discovery fans out to independent
-seller agents over the ResourceHold protocol.
+seller agents over the ResourceHold protocol. Checkout is hold-then-pay: the Checkout
+Coordinator holds every line with every seller, the buyer pays the Orchestrator's escrow over
+the Agent Payment Protocol, and only then are the holds committed and the sellers paid out.
 """
 
 from __future__ import annotations
@@ -22,8 +24,18 @@ from uagents_core.contrib.protocols.chat import (
     TextContent,
     chat_protocol_spec,
 )
+from uagents_core.contrib.protocols.payment import (
+    CancelPayment,
+    CommitPayment,
+    CompletePayment,
+    Funds,
+    RejectPayment,
+    RequestPayment,
+    payment_protocol_spec,
+)
 
 from resourcepilot import cards
+from resourcepilot.checkout import failure_message, hold_plan, round_complete, round_outcome
 from resourcepilot.clock import later, parse, utc_now
 from resourcepilot.config import (
     SPECIALIST_CHAIN,
@@ -32,15 +44,32 @@ from resourcepilot.config import (
     env_int,
     get_role,
 )
+from resourcepilot.escrow import CosmpyPayoutGateway, settle_booking
 from resourcepilot.intake import SAVED_PREFERENCES, parse_request_text, upcoming_days
-from resourcepilot.models import AuditEvent, HealthResponse, TaskRequest, TaskResult
+from resourcepilot.models import (
+    AuditEvent,
+    HealthResponse,
+    PaymentRecord,
+    TaskRequest,
+    TaskResult,
+)
+from resourcepilot.payment import (
+    STRIPE_MOCK,
+    CosmpyLedgerGateway,
+    PaymentConfig,
+    fet_for_usd_cents,
+    verify_commit,
+)
 from resourcepilot.pricing import usd
 from resourcepilot.protocols import (
     BookingConfirmed,
+    CommitHold,
     HoldConfirmed,
     HoldRejected,
+    HoldRequest,
     Quote,
     QuoteRequest,
+    ReleaseHold,
     resource_hold_spec,
     seller_protocol_digest,
 )
@@ -51,6 +80,7 @@ from resourcepilot.workflow import (
     begin_workflow,
     execute_specialist,
     is_timed_out,
+    make_task,
     task_result,
 )
 
@@ -61,6 +91,8 @@ ROLE = get_role()
 ADDRESSES = agent_addresses()
 PORT = int(os.getenv("AGENT_PORT", str(ROLE.configured_port())))
 QUOTE_WINDOW_SECONDS = env_int("QUOTE_WINDOW_SECONDS", 12, minimum=3)
+HOLD_WINDOW_SECONDS = env_int("HOLD_WINDOW_SECONDS", 15, minimum=3)
+PAYMENT_DEADLINE_SECONDS = env_int("PAYMENT_DEADLINE_SECONDS", 600, minimum=60)
 
 agent = Agent(
     name=ROLE.name,
@@ -75,6 +107,11 @@ agent = Agent(
 chat_proto = Protocol(spec=chat_protocol_spec)
 task_proto = Protocol(name="ResourcePilotTasks", version="1.0.0")
 hold_proto = Protocol(spec=resource_hold_spec, role="buyer")
+payment_proto = Protocol(spec=payment_protocol_spec, role="seller")
+# The Orchestrator's own wallet is the escrow account buyers pay into.
+ESCROW_WALLET = str(agent.wallet.address())
+ledger = CosmpyLedgerGateway()
+payouts = CosmpyPayoutGateway(agent.wallet)
 READY = False
 
 
@@ -274,6 +311,58 @@ async def _show_bundles(ctx: Context, sender: str, state: dict[str, Any]) -> Non
     )
 
 
+def _holds_expired(state: dict[str, Any]) -> bool:
+    expires_at = state.get("holds_expire_at")
+    return bool(expires_at) and utc_now() >= parse(str(expires_at))
+
+
+async def _show_review(ctx: Context, sender: str, state: dict[str, Any]) -> None:
+    await _send_card(
+        ctx,
+        sender,
+        "Every seller is holding your items. Review the total, then choose how to pay.",
+        cards.holds_review_card(
+            str(state["workflow_id"]),
+            state["data"]["brief"],
+            state["bundle"],
+            str(state["holds_expire_at"]),
+        ),
+    )
+
+
+async def _show_payment_options(ctx: Context, sender: str, state: dict[str, Any]) -> None:
+    total = int(state["bundle"]["total_cents"])
+    try:
+        fet_amount: str | None = str(fet_for_usd_cents(total))
+    except ValueError:
+        fet_amount = None
+    await _send_card(
+        ctx,
+        sender,
+        f"Pay {usd(total)} into ResourcePilot escrow. "
+        "Sellers are paid after every booking commits.",
+        cards.payment_options_card(str(state["workflow_id"]), total, fet_amount),
+    )
+
+
+async def _send_receipt(ctx: Context, sender: str, state: dict[str, Any], narration: str) -> None:
+    payment = await store.get_payment(str(state["payment_reference"]))
+    receipt = state["receipt"]
+    await _send_card(
+        ctx,
+        sender,
+        narration,
+        cards.receipt_card(
+            state["data"]["brief"],
+            state["bundle"],
+            list(receipt["bookings"]),
+            payment or {"currency": ""},
+            list(receipt["ledger"]),
+        ),
+        terminal=True,
+    )
+
+
 async def _workflow_action(
     ctx: Context, sender: str, action: str, selection: dict[str, Any], state: dict[str, Any]
 ) -> None:
@@ -288,6 +377,12 @@ async def _workflow_action(
             )
         elif state["status"] == "awaiting_selection":
             await _show_bundles(ctx, sender, state)
+        elif state["status"] == "awaiting_payment":
+            await _show_review(ctx, sender, state)
+        elif state["status"] == "payment_requested":
+            await _show_payment_options(ctx, sender, state)
+        elif state["status"] == "booked":
+            await _send_receipt(ctx, sender, state, "Here is your booking receipt.")
         else:
             await _send_card(
                 ctx,
@@ -311,10 +406,347 @@ async def _workflow_action(
             sender,
             f"{bundle['label']}: {usd(bundle['total_cents'])} from "
             f"{bundle['seller_count']} vetted sellers.",
-            cards.bundle_detail(workflow_id, state["data"]["brief"], bundle, checkout=False),
+            cards.bundle_detail(
+                workflow_id,
+                state["data"]["brief"],
+                bundle,
+                checkout=state["status"] == "awaiting_selection",
+            ),
         )
         return
+    if action == "place_holds" and bundle:
+        await _place_holds(ctx, sender, state, bundle)
+        return
+    if action == "choose_payment" and state["status"] in {"awaiting_payment", "payment_requested"}:
+        if _holds_expired(state):
+            await _release_holds(ctx, sender, state, "The holds expired before payment")
+            return
+        await _show_payment_options(ctx, sender, state)
+        return
+    if action == "pay":
+        await _request_payment(ctx, sender, state, str(selection.get("payment_method", "")))
+        return
+    if action == "release_holds":
+        await _release_holds(ctx, sender, state, "Buyer released the holds")
+        return
     await ctx.send(sender, cards.text_message("That action is not valid for this request."))
+
+
+# ---------------------------------------------------------------------------
+# Checkout: hold everything, take payment into escrow, then commit everything.
+# ---------------------------------------------------------------------------
+
+
+async def _place_holds(
+    ctx: Context, sender: str, state: dict[str, Any], bundle: dict[str, Any]
+) -> None:
+    workflow_id = str(state["workflow_id"])
+    attempt = int(state.get("hold_attempt", 0))
+    if state["status"] != "awaiting_selection" or not await store.claim(
+        "place_holds", f"{workflow_id}:{attempt}"
+    ):
+        await ctx.send(
+            sender, cards.text_message("Holds are already in progress for this request.")
+        )
+        return
+    task = make_task(
+        workflow_id=workflow_id,
+        requester=sender,
+        session_id=str(state["session_id"]),
+        target_role="fulfillment",
+        payload={"phase": "hold", "brief": state["data"]["brief"], "bundle": bundle},
+    )
+    state = await store.patch_workflow(
+        workflow_id,
+        {
+            "status": "running",
+            "stage": "holds",
+            "bundle": bundle,
+            "hold_attempt": attempt + 1,
+            "expected_request_id": task.request_id,
+            "deadline_at": task.deadline_at,
+        },
+    )
+    await _audit(ctx, state, "holds_requested", bundle_id=bundle["bundle_id"])
+    await _dispatch(ctx, task)
+    await _send_card(
+        ctx,
+        sender,
+        f"Asking {bundle['seller_count']} sellers to hold everything at once. No money moves yet.",
+        cards.progress_card(workflow_id, "holds"),
+    )
+
+
+async def _release_holds(ctx: Context, sender: str, state: dict[str, Any], reason: str) -> None:
+    if state["status"] not in {"awaiting_payment", "payment_requested"}:
+        await ctx.send(sender, cards.text_message("There are no active holds to release."))
+        return
+    reference = state.get("payment_reference")
+    if reference and not await store.cancel_payment(str(reference), reason):
+        payment = await store.get_payment(str(reference))
+        if payment and payment["status"] != "cancelled":
+            await ctx.send(
+                sender,
+                cards.text_message(
+                    "Your payment was already received, so the holds stay in place."
+                ),
+            )
+            return
+    task = make_task(
+        workflow_id=str(state["workflow_id"]),
+        requester=sender,
+        session_id=str(state["session_id"]),
+        target_role="fulfillment",
+        payload={"phase": "release", "holds": list(state.get("holds", [])), "reason": reason},
+    )
+    await _dispatch(ctx, task)
+    state = await store.patch_workflow(
+        str(state["workflow_id"]),
+        {
+            "status": "awaiting_selection",
+            "stage": "selection",
+            "holds": [],
+            "holds_expire_at": None,
+            "payment_reference": None,
+        },
+    )
+    await _audit(ctx, state, "holds_released", reason=reason)
+    await ctx.send(
+        sender, cards.text_message(f"{reason}. Every hold was released; nothing was charged.")
+    )
+    await _show_bundles(ctx, sender, state)
+
+
+async def _request_payment(ctx: Context, sender: str, state: dict[str, Any], method: str) -> None:
+    if state["status"] not in {"awaiting_payment", "payment_requested"}:
+        await ctx.send(sender, cards.text_message("Payment is not open for this request."))
+        return
+    if _holds_expired(state):
+        await _release_holds(ctx, sender, state, "The holds expired before payment")
+        return
+    bundle = state["bundle"]
+    try:
+        config = PaymentConfig.for_total(method, int(bundle["total_cents"]), ESCROW_WALLET)
+    except ValueError as exc:
+        await ctx.send(sender, cards.text_message(f"Payment configuration error: {exc}"))
+        return
+    previous = state.get("payment_reference")
+    if previous:
+        await store.cancel_payment(str(previous), "Buyer switched payment method")
+    reference = str(uuid4())
+    await store.create_payment(
+        PaymentRecord(
+            reference=reference,
+            workflow_id=str(state["workflow_id"]),
+            requester=sender,
+            amount=str(config.amount),
+            currency=config.currency,
+            recipient=config.recipient,
+            network=config.network,
+            status="requested",
+        )
+    )
+    state = await store.patch_workflow(
+        str(state["workflow_id"]),
+        {"status": "payment_requested", "stage": "payment", "payment_reference": reference},
+    )
+    hold_seconds = int((parse(str(state["holds_expire_at"])) - utc_now()).total_seconds())
+    mock = config.mode == STRIPE_MOCK
+    await ctx.send(
+        sender,
+        RequestPayment(
+            accepted_funds=[
+                Funds(
+                    amount=str(config.amount), currency=config.currency, payment_method=config.mode
+                )
+            ],
+            recipient=config.recipient,
+            deadline_seconds=max(60, min(PAYMENT_DEADLINE_SECONDS, hold_seconds)),
+            reference=reference,
+            description=(
+                f"ResourcePilot escrow for {len(bundle['lines'])} bookings with "
+                f"{bundle['seller_count']} sellers"
+            ),
+            metadata={
+                "fet_network": config.network,
+                "stripe_mock": "true" if mock else "false",
+                "moves_funds": "false" if mock else "true",
+                "escrow": "true",
+                "warning": "Mock Stripe only: no Stripe API call and no funds moved"
+                if mock
+                else "",
+            },
+        ),
+    )
+    await _audit(ctx, state, "payment_requested", reference=reference, mode=config.mode)
+    await ctx.send(
+        sender,
+        cards.text_message(
+            "Payment requested. Mock Stripe is simulated and moves no money."
+            if mock
+            else f"Payment requested: {config.amount} test FET on stable-testnet."
+        ),
+    )
+
+
+@payment_proto.on_message(model=CommitPayment)
+async def handle_commit(ctx: Context, sender: str, commit: CommitPayment) -> None:
+    if ROLE.key != "orchestrator":
+        return
+    reference = str(commit.reference or "")
+    payment = await store.get_payment(reference)
+    if payment is None:
+        await ctx.send(
+            sender,
+            CancelPayment(transaction_id=commit.transaction_id, reason="unknown payment reference"),
+        )
+        return
+    try:
+        config = PaymentConfig.from_record(payment)
+    except ValueError as exc:
+        await ctx.send(sender, CancelPayment(transaction_id=commit.transaction_id, reason=str(exc)))
+        return
+    verified, reason = await verify_commit(
+        store, commit, sender=sender, config=config, gateway=ledger
+    )
+    if not verified:
+        await ctx.send(sender, CancelPayment(transaction_id=commit.transaction_id, reason=reason))
+        return
+    await ctx.send(sender, CompletePayment(transaction_id=commit.transaction_id))
+    state = await store.get_workflow(str(payment["workflow_id"]))
+    if state is None:
+        return
+    if state["status"] == "booked" and state.get("payment_reference") == reference:
+        await _send_receipt(ctx, sender, state, "This payment already booked; same receipt.")
+        return
+    # Only the first verified commit for the active reference may reserve and book.
+    if (
+        state.get("payment_reference") != reference
+        or state["status"] != "payment_requested"
+        or not await store.reserve_payment(reference)
+    ):
+        await ctx.send(sender, cards.text_message("Payment already received for this request."))
+        return
+    task = make_task(
+        workflow_id=str(state["workflow_id"]),
+        requester=sender,
+        session_id=str(state["session_id"]),
+        target_role="fulfillment",
+        payload={
+            "phase": "commit",
+            "holds": list(state["holds"]),
+            "payment_reference": reference,
+        },
+    )
+    state = await store.patch_workflow(
+        str(state["workflow_id"]),
+        {
+            "status": "running",
+            "stage": "booking",
+            "expected_request_id": task.request_id,
+            "deadline_at": task.deadline_at,
+        },
+    )
+    await _audit(ctx, state, "payment_verified", reference=reference, mode=config.mode)
+    try:
+        await _dispatch(ctx, task)
+    except Exception:
+        await store.release_payment(reference, "dispatch to Checkout Coordinator failed")
+        raise
+    await _send_card(
+        ctx,
+        sender,
+        "Payment verified and held in escrow. Committing every booking now.",
+        cards.progress_card(str(state["workflow_id"]), "booking"),
+    )
+
+
+@payment_proto.on_message(model=RejectPayment)
+async def handle_reject(ctx: Context, sender: str, message: RejectPayment) -> None:
+    if ROLE.key != "orchestrator":
+        return
+    state = await store.find_workflow(sender, _session(ctx))
+    if state and state["status"] == "payment_requested":
+        await _release_holds(ctx, sender, state, "Payment was declined")
+        return
+    await ctx.send(sender, cards.text_message("Payment declined. Nothing was charged."))
+
+
+async def _checkout_result(ctx: Context, result: TaskResult) -> None:
+    if not await store.claim("task_result", result.request_id):
+        return
+    state = await store.get_workflow(result.workflow_id)
+    if (
+        state is None
+        or state.get("expected_request_id") != result.request_id
+        or state.get("stage") not in {"holds", "booking"}
+    ):
+        return
+    requester = result.requester
+    if state["stage"] == "holds":
+        if result.ok:
+            state = await store.patch_workflow(
+                result.workflow_id,
+                {
+                    "status": "awaiting_payment",
+                    "stage": "review",
+                    "holds": list(result.payload["holds"]),
+                    "holds_expire_at": str(result.payload["expires_at"]),
+                },
+            )
+            await _audit(ctx, state, "holds_placed", holds=len(state["holds"]))
+            await _show_review(ctx, requester, state)
+            return
+        state = await store.patch_workflow(
+            result.workflow_id,
+            {"status": "awaiting_selection", "stage": "selection", "error": result.error},
+        )
+        await _audit(
+            ctx, state, "holds_failed", failed=list(result.payload.get("failed_sellers", []))
+        )
+        await ctx.send(
+            requester,
+            cards.text_message(
+                f"{result.error}. Nothing was charged, and every other hold was released."
+            ),
+        )
+        await _show_bundles(ctx, requester, state)
+        return
+
+    reference = str(state["payment_reference"])
+    if not result.ok:
+        await store.release_payment(reference, result.error or "booking failed")
+        state = await store.patch_workflow(
+            result.workflow_id,
+            {"status": "booking_failed", "stage": "booking", "error": result.error},
+        )
+        await _audit(ctx, state, "booking_failed", error=result.error)
+        message = (
+            f"{result.error}. Every booking was cancelled. Your payment stays in escrow and "
+            "no seller was paid."
+        )
+        await _send_card(ctx, requester, message, cards.error_card(message, show_form=False))
+        return
+    payment = await store.get_payment(reference)
+    assert payment is not None
+    ledger_entries = await settle_booking(store, payouts, payment, state["bundle"])
+    await store.deliver_payment(reference)
+    state = await store.patch_workflow(
+        result.workflow_id,
+        {
+            "status": "booked",
+            "stage": "complete",
+            "receipt": {"bookings": list(result.payload["bookings"]), "ledger": ledger_entries},
+        },
+    )
+    await _audit(ctx, state, "booked", reference=reference, sellers=state["bundle"]["seller_count"])
+    await _send_receipt(
+        ctx,
+        requester,
+        state,
+        f"Booked with all {state['bundle']['seller_count']} sellers. "
+        "The receipt shows each seller's payout from escrow.",
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -330,6 +762,9 @@ async def handle_task(ctx: Context, sender: str, task: TaskRequest) -> None:
     if ROLE.key == "discovery":
         await _start_discovery(ctx, task)
         return
+    if ROLE.key == "fulfillment":
+        await _start_checkout_round(ctx, task)
+        return
     if ROLE.key not in SPECIALIST_CHAIN:
         return
     context: dict[str, Any] = {}
@@ -342,6 +777,9 @@ async def handle_task(ctx: Context, sender: str, task: TaskRequest) -> None:
 @task_proto.on_message(model=TaskResult)
 async def handle_task_result(ctx: Context, sender: str, result: TaskResult) -> None:
     if ROLE.key != "orchestrator" or sender != ADDRESSES.get(result.source_role):
+        return
+    if result.source_role == "fulfillment":
+        await _checkout_result(ctx, result)
         return
     try:
         next_task, state = await accept_result(store, result)
@@ -486,22 +924,184 @@ async def sweep(ctx: Context) -> None:
     if ROLE.key == "discovery":
         for expired in await store.list_expired_rounds("discovery", _now()):
             await _finish_discovery(ctx, expired)
+    if ROLE.key == "fulfillment":
+        for expired in await store.list_expired_rounds("fulfillment", _now()):
+            await _finish_checkout_round(ctx, expired, timed_out=True)
 
 
-# Buyer-role handlers that only the Checkout Coordinator acts on.
+# ---------------------------------------------------------------------------
+# Checkout Coordinator: all-or-nothing hold and commit rounds across sellers.
+# ---------------------------------------------------------------------------
+
+
+async def _start_checkout_round(ctx: Context, task: TaskRequest) -> None:
+    phase = str(task.payload.get("phase", ""))
+    if phase == "release":
+        reason = str(task.payload.get("reason", "Released by the buyer"))[:200]
+        for hold in task.payload.get("holds", []):
+            await ctx.send(
+                str(hold["address"]), ReleaseHold(hold_id=hold["hold_id"], reason=reason)
+            )
+        return
+    if utc_now() > parse(task.deadline_at):
+        await ctx.send(
+            ADDRESSES["orchestrator"],
+            task_result(task, "fulfillment", ok=False, error="Task timed out", payload={}),
+        )
+        return
+    reference = str(task.payload.get("payment_reference", ""))
+    try:
+        if phase == "hold":
+            holds = hold_plan(task.request_id, dict(task.payload["bundle"]))
+        elif phase == "commit":
+            payment = await store.get_payment(reference)
+            if payment is None or payment["status"] != "reserved":
+                raise ValueError("No reserved, verified payment for this booking")
+            holds = {str(hold["hold_id"]): dict(hold) for hold in task.payload["holds"]}
+        else:
+            raise ValueError(f"Unknown checkout phase: {phase}")
+    except (KeyError, ValueError) as exc:
+        await ctx.send(
+            ADDRESSES["orchestrator"],
+            task_result(task, "fulfillment", ok=False, error=str(exc), payload={"phase": phase}),
+        )
+        return
+    await store.create_round(
+        task.request_id,
+        "fulfillment",
+        later(HOLD_WINDOW_SECONDS),
+        {"task": task.dict(), "phase": phase, "holds": holds},
+    )
+    brief = dict(task.payload.get("brief", {}))
+    for hold in holds.values():
+        message: HoldRequest | CommitHold
+        if phase == "hold":
+            message = HoldRequest(
+                round_id=task.request_id,
+                workflow_id=task.workflow_id,
+                hold_id=hold["hold_id"],
+                item_id=hold["item_id"],
+                quantity=hold["quantity"],
+                window_start=str(brief["window_start"]),
+                window_end=str(brief["window_end"]),
+            )
+        else:
+            message = CommitHold(
+                round_id=task.request_id, hold_id=hold["hold_id"], payment_reference=reference
+            )
+        await ctx.send(str(hold["address"]), message)
+
+
+async def _record_checkout_reply(
+    ctx: Context, sender: str, round_id: str, hold_id: str, phase: str, reply: dict[str, Any]
+) -> None:
+    current = await store.get_round(round_id)
+    if current is None or current["owner_role"] != "fulfillment" or current["phase"] != phase:
+        return
+    hold = current["holds"].get(hold_id)
+    # Only the seller agent the hold was sent to may answer for it.
+    if hold is None or hold["address"] != sender:
+        return
+    state = await store.record_reply(round_id, hold_id, reply)
+    if state is None:
+        latest = await store.get_round(round_id)
+        if latest and latest["closed"] and hold_id not in latest["replies"]:
+            # The round already failed; never leave a late success behind.
+            await ctx.send(
+                sender, ReleaseHold(hold_id=hold_id, reason="Arrived after the round closed")
+            )
+        return
+    if round_complete(state):
+        await _finish_checkout_round(ctx, state, timed_out=False)
+
+
 @hold_proto.on_message(model=HoldConfirmed)
 async def handle_hold_confirmed(ctx: Context, sender: str, message: HoldConfirmed) -> None:
-    return None
+    if ROLE.key != "fulfillment":
+        return
+    current = await store.get_round(message.round_id)
+    hold = (current or {}).get("holds", {}).get(message.hold_id)
+    if hold and int(message.subtotal_cents) != int(hold["subtotal_cents"]):
+        reply = {"status": "rejected", "reason": "Confirmed a different price than it quoted"}
+    else:
+        reply = {"status": "held", "expires_at": message.expires_at}
+    await _record_checkout_reply(ctx, sender, message.round_id, message.hold_id, "hold", reply)
 
 
 @hold_proto.on_message(model=HoldRejected)
 async def handle_hold_rejected(ctx: Context, sender: str, message: HoldRejected) -> None:
-    return None
+    if ROLE.key != "fulfillment":
+        return
+    current = await store.get_round(message.round_id)
+    phase = str((current or {}).get("phase", ""))
+    reply = {"status": "rejected", "reason": message.reason[:200]}
+    await _record_checkout_reply(ctx, sender, message.round_id, message.hold_id, phase, reply)
 
 
 @hold_proto.on_message(model=BookingConfirmed)
 async def handle_booking_confirmed(ctx: Context, sender: str, message: BookingConfirmed) -> None:
-    return None
+    if ROLE.key != "fulfillment":
+        return
+    reply = {"status": "booked", "confirmation_code": message.confirmation_code[:40]}
+    await _record_checkout_reply(ctx, sender, message.round_id, message.hold_id, "commit", reply)
+
+
+async def _finish_checkout_round(ctx: Context, state: dict[str, Any], *, timed_out: bool) -> None:
+    if not await store.close_round(str(state["round_id"])):
+        return
+    task = TaskRequest.parse_obj(state["task"])
+    phase = str(state["phase"])
+    outcome = round_outcome(state, timed_out=timed_out)
+    ok_counter, failed_counter = (
+        ("holds_confirmed", "holds_failed")
+        if phase == "hold"
+        else ("bookings_committed", "bookings_failed")
+    )
+    failed_ids = list(dict.fromkeys(item["seller_id"] for item in outcome["failed"]))
+    confirmed_ids = {item["seller_id"] for item in outcome["confirmed"]} - set(failed_ids)
+    for seller_id in sorted(confirmed_ids):
+        await _seller_outcome(ctx, task.workflow_id, seller_id, ok_counter)
+    for seller_id in failed_ids:
+        await _seller_outcome(ctx, task.workflow_id, seller_id, failed_counter)
+
+    if not outcome["failed"] and not outcome["cancelled"]:
+        if phase == "hold":
+            holds = outcome["confirmed"]
+            payload = {
+                "phase": phase,
+                "holds": holds,
+                "expires_at": min((str(hold["expires_at"]) for hold in holds), key=parse),
+            }
+        else:
+            payload = {
+                "phase": phase,
+                "bookings": [
+                    {
+                        key: item[key]
+                        for key in ("hold_id", "seller_id", "item_id", "confirmation_code")
+                    }
+                    for item in outcome["confirmed"]
+                ],
+            }
+        await ctx.send(
+            ADDRESSES["orchestrator"], task_result(task, "fulfillment", ok=True, payload=payload)
+        )
+        return
+
+    # All or nothing: release every hold in the round, including any that may land late.
+    reason = "Released because another seller in the bundle could not confirm"
+    for hold in state["holds"].values():
+        await ctx.send(str(hold["address"]), ReleaseHold(hold_id=hold["hold_id"], reason=reason))
+    await ctx.send(
+        ADDRESSES["orchestrator"],
+        task_result(
+            task,
+            "fulfillment",
+            ok=False,
+            error=failure_message(phase, outcome["failed"]),
+            payload={"phase": phase, "failed_sellers": failed_ids},
+        ),
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -535,6 +1135,8 @@ agent.include(chat_proto, publish_manifest=True)
 agent.include(task_proto, publish_manifest=True)
 if ROLE.key in {"discovery", "fulfillment"}:
     agent.include(hold_proto, publish_manifest=True)
+if ROLE.key == "orchestrator":
+    agent.include(payment_proto, publish_manifest=True)
 
 
 if __name__ == "__main__":
