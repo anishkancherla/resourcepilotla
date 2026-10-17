@@ -243,7 +243,11 @@ async def test_one_declined_hold_releases_the_rest_and_charges_nothing(network) 
     await hold_first_bundle(network)
     assert not [card for card in network.cards() if card[0] == "review"]
     assert any("Hilltop Studio Rooms could not hold" in text for text in network.texts())
-    assert last_card(network)[0] == "carousel"
+    kind, _, narration = last_card(network)
+    assert kind == "carousel"
+    # The Planner rerouted, and says plainly that no other trusted seller has a podcast room.
+    assert "Rerouted around: Hilltop Studio Rooms" in narration
+    assert "No trusted seller had: podcast_room" in narration
     assert {hold["status"] for hold in network.store.holds.values()} == {"released"}
     assert network.store.payments == {}
     assert workflow(network)["status"] == "awaiting_selection"

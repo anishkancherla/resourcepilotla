@@ -524,6 +524,49 @@ def receipt_card(
     }
 
 
+def recovery_card(
+    workflow_id: str, error: str, total_cents: int, refund_due_at: str
+) -> tuple[str, dict[str, Any]]:
+    return "review", {
+        "title": "Booking did not complete",
+        "summary_rows": [
+            {"label": "What happened", "value": error},
+            {"label": "Bookings", "value": "Every seller's booking was cancelled"},
+            {
+                "label": "Your payment",
+                "value": f"{usd(total_cents)} is safe in escrow. No seller was paid.",
+            },
+            {
+                "label": "Auto refund",
+                "value": f"Refunded automatically at {_local_time(refund_due_at)} if you wait",
+            },
+            {"label": "Retry", "value": "Retrying uses the same payment; you never pay twice"},
+        ],
+        "approve_cta": {
+            "label": "Retry booking",
+            "primary": True,
+            "selection": {"action": "retry_booking", "workflow_id": workflow_id},
+        },
+        "reject_cta": {
+            "label": "Refund me",
+            "selection": {"action": "refund", "workflow_id": workflow_id},
+        },
+    }
+
+
+def refund_card(payment: dict[str, Any], entry: dict[str, Any]) -> tuple[str, dict[str, Any]]:
+    return "detail", {
+        "title": "Refunded",
+        "summary_rows": [
+            {"label": "Amount", "value": f"{entry['amount']} {entry['currency']}"},
+            {"label": "Method", "value": rail_label(str(payment["currency"]))},
+            {"label": "Status", "value": note_for(entry)},
+            {"label": "Sellers", "value": "No seller was paid for this request"},
+        ],
+        "ctas": [{"label": "New request", "primary": True, "selection": {"action": "start_over"}}],
+    }
+
+
 VETTING_STAGES = {
     "identity": "Identity",
     "protocol": "Protocol",

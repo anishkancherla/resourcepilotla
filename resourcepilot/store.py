@@ -48,7 +48,9 @@ class DurableStore(Protocol):
 
     async def patch_workflow(self, workflow_id: str, patch: dict[str, Any]) -> dict[str, Any]: ...
 
-    async def list_overdue_workflows(self, now: str) -> list[dict[str, Any]]: ...
+    async def list_overdue_workflows(
+        self, now: str, status: str = "running"
+    ) -> list[dict[str, Any]]: ...
 
     async def recent_bookings(self, requester: str, limit: int) -> list[dict[str, Any]]: ...
 
@@ -194,11 +196,13 @@ class MemoryStore:
             state.update(deepcopy(patch))
             return deepcopy(state)
 
-    async def list_overdue_workflows(self, now: str) -> list[dict[str, Any]]:
+    async def list_overdue_workflows(
+        self, now: str, status: str = "running"
+    ) -> list[dict[str, Any]]:
         return [
             deepcopy(state)
             for state in self.workflows.values()
-            if state.get("status") == "running"
+            if state.get("status") == status
             and state.get("deadline_at")
             and _parse(str(state["deadline_at"])) < _parse(now)
         ]
@@ -566,12 +570,15 @@ class PostgresStore:
             raise KeyError(workflow_id)
         return dict(json.loads(value))
 
-    async def list_overdue_workflows(self, now: str) -> list[dict[str, Any]]:
+    async def list_overdue_workflows(
+        self, now: str, status: str = "running"
+    ) -> list[dict[str, Any]]:
         rows = await self._pool().fetch(
             """SELECT state FROM workflows
-               WHERE state->>'status'='running'
+               WHERE state->>'status'=$2
                  AND (state->>'deadline_at')::timestamptz < $1::timestamptz""",
             _parse(now),
+            status,
         )
         return [json.loads(row["state"]) for row in rows]
 

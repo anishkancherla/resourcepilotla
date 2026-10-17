@@ -45,6 +45,12 @@ async def test_workflow_patch_find_and_overdue(any_store: DurableStore, unique: 
     assert (await any_store.find_workflow(f"agent1q{unique}", "s1"))["stage"] == "discovery"
     overdue = await any_store.list_overdue_workflows(iso())
     assert workflow_id in {item["workflow_id"] for item in overdue}
+    await any_store.patch_workflow(workflow_id, {"status": "booking_failed"})
+    assert workflow_id not in {
+        w["workflow_id"] for w in await any_store.list_overdue_workflows(iso())
+    }
+    refunds_due = await any_store.list_overdue_workflows(iso(), status="booking_failed")
+    assert workflow_id in {item["workflow_id"] for item in refunds_due}
     await any_store.patch_workflow(workflow_id, {"status": "booked"})
     overdue = await any_store.list_overdue_workflows(iso())
     assert workflow_id not in {item["workflow_id"] for item in overdue}

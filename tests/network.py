@@ -91,6 +91,7 @@ class AgentNetwork:
     inbox: list[Model] = field(default_factory=list)
     almanac: dict[str, list[str]] = field(default_factory=dict)
     dropped: list[tuple[str, str]] = field(default_factory=list)
+    offline: set[str] = field(default_factory=set)
     offset: timedelta = timedelta()
     store: MemoryStore = field(default_factory=MemoryStore)
 
@@ -113,18 +114,22 @@ class AgentNetwork:
             module = self.modules.get(destination)
             name = HANDLER_NAMES.get(type(message).__name__)
             handler = getattr(module, name, None) if module and name else None
-            if handler is None:
+            if handler is None or destination in self.offline:
                 self.dropped.append((destination, type(message).__name__))
                 continue
             await handler(FakeContext(self, destination, session), sender, message)
         raise RuntimeError("message loop did not settle")
+
+    def set_offline(self, key: str, offline: bool = True) -> None:
+        """Simulate an agent that is down: messages to it are lost and its sweep does not run."""
+        (self.offline.add if offline else self.offline.discard)(self.address(key))
 
     async def advance(self, seconds: float) -> None:
         """Move every agent's clock forward, then run each interval sweep once."""
         self.offset += timedelta(seconds=seconds)
         for address, module in self.modules.items():
             sweep = getattr(module, "sweep", None)
-            if sweep is not None:
+            if sweep is not None and address not in self.offline:
                 await sweep(FakeContext(self, address))
         await self.run()
 
