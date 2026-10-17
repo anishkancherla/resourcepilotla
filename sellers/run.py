@@ -25,7 +25,9 @@ from resourcepilot.clock import utc_now
 from resourcepilot.config import env_bool, env_int, get_seller
 from resourcepilot.models import HealthResponse
 from resourcepilot.protocols import (
+    BookingConfirmed,
     CommitHold,
+    HoldConfirmed,
     HoldRejected,
     HoldRequest,
     Quote,
@@ -95,6 +97,12 @@ async def handle_quote_request(ctx: Context, sender: str, request: QuoteRequest)
         ctx.logger.warning("Fault mode ghost_quotes: ignoring quote request %s", request.round_id)
         return
     offers = await build_offers(store, LISTING, request, _now())
+    ctx.logger.info(
+        "Quote for workflow %s: %d offers across %s",
+        request.workflow_id,
+        len(offers),
+        ", ".join(request.categories),
+    )
     await ctx.send(
         sender,
         Quote(
@@ -124,6 +132,12 @@ async def handle_hold_request(ctx: Context, sender: str, request: HoldRequest) -
         )
         return
     reply = await place_hold(store, LISTING, request, ttl_seconds=HOLD_TTL_SECONDS, now=_now())
+    ctx.logger.info(
+        "Hold %s for workflow %s: %s",
+        request.hold_id,
+        request.workflow_id,
+        "confirmed" if isinstance(reply, HoldConfirmed) else f"rejected ({reply.reason})",
+    )
     await ctx.send(sender, reply)
 
 
@@ -132,14 +146,21 @@ async def handle_commit(ctx: Context, sender: str, request: CommitHold) -> None:
     if await resolve_fault_mode(store, LISTING.seller_id) == "ghost_commits":
         ctx.logger.warning("Fault mode ghost_commits: ignoring commit %s", request.hold_id)
         return
-    await ctx.send(sender, await commit_hold(store, LISTING, request, now=_now()))
+    reply = await commit_hold(store, LISTING, request, now=_now())
+    ctx.logger.info(
+        "Commit %s: %s",
+        request.hold_id,
+        "booked" if isinstance(reply, BookingConfirmed) else f"rejected ({reply.reason})",
+    )
+    await ctx.send(sender, reply)
 
 
 @hold_proto.on_message(model=ReleaseHold)
 async def handle_release(ctx: Context, sender: str, request: ReleaseHold) -> None:
     hold = await store.get_hold(request.hold_id)
     if hold and hold["seller_id"] == LISTING.seller_id:
-        await store.release_hold(request.hold_id, request.reason[:200])
+        if await store.release_hold(request.hold_id, request.reason[:200]):
+            ctx.logger.info("Released %s: %s", request.hold_id, request.reason[:200])
 
 
 def _chat_text(message: ChatMessage) -> str:
