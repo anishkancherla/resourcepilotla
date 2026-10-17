@@ -1,0 +1,140 @@
+x-agent: &agent
+  build: .
+  env_file: .env
+  restart: unless-stopped
+  depends_on:
+    postgres:
+      condition: service_healthy
+  healthcheck:
+    test:
+      [
+        "CMD",
+        "python",
+        "-c",
+        "import json,urllib.request; u='http://127.0.0.1:18000/health'; assert json.load(urllib.request.urlopen(u))['status']=='ok'",
+      ]
+    interval: 10s
+    timeout: 3s
+    retries: 8
+    start_period: 15s
+
+services:
+  postgres:
+    image: postgres:17-alpine
+    env_file: .env
+    ports: ["127.0.0.1:5432:5432"]
+    volumes: ["postgres-data:/var/lib/postgresql/data"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+  # Eight ResourcePilot platform agents.
+  orchestrator:
+    <<: *agent
+    environment:
+      AGENT_MODULE: agents.run
+      AGENT_ROLE: orchestrator
+      AGENT_PORT: ${ORCHESTRATOR_PORT}
+    ports: ["127.0.0.1:${ORCHESTRATOR_PORT}:18000"]
+
+  intake:
+    <<: *agent
+    environment:
+      AGENT_MODULE: agents.run
+      AGENT_ROLE: intake
+      AGENT_PORT: ${INTAKE_PORT}
+    ports: ["127.0.0.1:${INTAKE_PORT}:18000"]
+
+  discovery:
+    <<: *agent
+    environment:
+      AGENT_MODULE: agents.run
+      AGENT_ROLE: discovery
+      AGENT_PORT: ${DISCOVERY_PORT}
+    ports: ["127.0.0.1:${DISCOVERY_PORT}:18000"]
+
+  verification:
+    <<: *agent
+    environment:
+      AGENT_MODULE: agents.run
+      AGENT_ROLE: verification
+      AGENT_PORT: ${VERIFICATION_PORT}
+    ports: ["127.0.0.1:${VERIFICATION_PORT}:18000"]
+
+  analysis:
+    <<: *agent
+    environment:
+      AGENT_MODULE: agents.run
+      AGENT_ROLE: analysis
+      AGENT_PORT: ${ANALYSIS_PORT}
+    ports: ["127.0.0.1:${ANALYSIS_PORT}:18000"]
+
+  planner:
+    <<: *agent
+    environment:
+      AGENT_MODULE: agents.run
+      AGENT_ROLE: planner
+      AGENT_PORT: ${PLANNER_PORT}
+    ports: ["127.0.0.1:${PLANNER_PORT}:18000"]
+
+  fulfillment:
+    <<: *agent
+    environment:
+      AGENT_MODULE: agents.run
+      AGENT_ROLE: fulfillment
+      AGENT_PORT: ${FULFILLMENT_PORT}
+    ports: ["127.0.0.1:${FULFILLMENT_PORT}:18000"]
+
+  memory-audit:
+    <<: *agent
+    environment:
+      AGENT_MODULE: agents.run
+      AGENT_ROLE: memory_audit
+      AGENT_PORT: ${MEMORY_AUDIT_PORT}
+    ports: ["127.0.0.1:${MEMORY_AUDIT_PORT}:18000"]
+
+  # Five independent demo seller agents.
+  westwood-print:
+    <<: *agent
+    environment:
+      AGENT_MODULE: sellers.run
+      SELLER_ID: westwood_print
+      AGENT_PORT: ${WESTWOOD_PRINT_PORT}
+    ports: ["127.0.0.1:${WESTWOOD_PRINT_PORT}:18000"]
+
+  gayley-copy:
+    <<: *agent
+    environment:
+      AGENT_MODULE: sellers.run
+      SELLER_ID: gayley_copy
+      AGENT_PORT: ${GAYLEY_COPY_PORT}
+    ports: ["127.0.0.1:${GAYLEY_COPY_PORT}:18000"]
+
+  flash-prints:
+    <<: *agent
+    environment:
+      AGENT_MODULE: sellers.run
+      SELLER_ID: flash_prints
+      AGENT_PORT: ${FLASH_PRINTS_PORT}
+    ports: ["127.0.0.1:${FLASH_PRINTS_PORT}:18000"]
+
+  gear-share:
+    <<: *agent
+    environment:
+      AGENT_MODULE: sellers.run
+      SELLER_ID: gear_share
+      AGENT_PORT: ${GEAR_SHARE_PORT}
+    ports: ["127.0.0.1:${GEAR_SHARE_PORT}:18000"]
+
+  studio-rooms:
+    <<: *agent
+    environment:
+      AGENT_MODULE: sellers.run
+      SELLER_ID: studio_rooms
+      AGENT_PORT: ${STUDIO_ROOMS_PORT}
+    ports: ["127.0.0.1:${STUDIO_ROOMS_PORT}:18000"]
+
+volumes:
+  postgres-data:

@@ -1,0 +1,12 @@
+.env
+.profiles.json
+.git
+.venv
+.agent-data
+postgres-data
+**/__pycache__
+.pytest_cache
+.mypy_cache
+.ruff_cache
+tests
+docs

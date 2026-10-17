@@ -65,3 +65,28 @@ def network(monkeypatch: pytest.MonkeyPatch, network_env: dict[str, str], networ
 
     with agent_network(monkeypatch, network_env, network_modules) as running:
         yield running
+
+
+@pytest.fixture
+async def postgres_network(
+    monkeypatch: pytest.MonkeyPatch, network_env: dict[str, str], network_modules
+):
+    """The whole agent network on real Postgres, isolated in a throwaway schema."""
+    import asyncpg
+    from network import agent_network
+
+    if not TEST_DATABASE_URL:
+        pytest.skip("set TEST_DATABASE_URL to run the network on Postgres")
+    schema = f"rp_e2e_{uuid4().hex[:12]}"
+    admin = await asyncpg.connect(TEST_DATABASE_URL)
+    await admin.execute(f'CREATE SCHEMA "{schema}"')
+    joiner = "&" if "?" in TEST_DATABASE_URL else "?"
+    store = PostgresStore(f"{TEST_DATABASE_URL}{joiner}search_path={schema}")
+    await store.setup()
+    try:
+        with agent_network(monkeypatch, network_env, network_modules, store=store) as running:
+            yield running
+    finally:
+        await store.close()
+        await admin.execute(f'DROP SCHEMA "{schema}" CASCADE')
+        await admin.close()

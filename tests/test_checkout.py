@@ -355,3 +355,45 @@ async def test_demo_buyer_script_clicks_through_the_real_cards(network, monkeypa
     assert request.accepted_funds[0].payment_method == "stripe_mock"
     await network.send_user(mock_commit(request))
     assert workflow(network)["status"] == "booked"
+
+
+async def test_full_checkout_and_duplicate_commit_on_postgres(postgres_network) -> None:
+    network = postgres_network
+    await hold_first_bundle(network)
+    request = await request_payment(network, "stripe_mock")
+    commit = mock_commit(request)
+    await network.send_user(commit)
+    await network.send_user(commit)
+
+    payment = await network.store.get_payment(request.reference)
+    assert payment["status"] == "delivered"
+    state = await network.store.get_workflow(payment["workflow_id"])
+    assert state["status"] == "booked"
+    entries = await network.store.list_escrow_entries(request.reference)
+    assert len(entries) == 4
+    assert {entry["status"] for entry in entries if entry["kind"] == "payout"} == {"simulated"}
+    for hold in state["holds"]:
+        assert (await network.store.get_hold(hold["hold_id"]))["status"] == "committed"
+    records = await network.store.seller_records(sorted(sellers_in(state["bundle"])))
+    assert {record["bookings_committed"] for record in records.values()} == {1}
+    events = [
+        event["event_type"] for event in await network.store.list_events(state["workflow_id"])
+    ]
+    assert events.count("booked") == 1
+
+
+async def test_reroute_after_a_silent_seller_on_postgres(postgres_network) -> None:
+    network = postgres_network
+    await network.store.set_fault_mode("westwood_print", "ghost_holds")
+    await hold_first_bundle(network)
+    await network.advance(6)
+    _, carousel, narration = last_card(network, "carousel")
+    assert "Rerouted around: Westwood Print Lab" in narration
+    workflow_id = carousel["items"][0]["primary_cta"]["selection"]["workflow_id"]
+    state = await network.store.get_workflow(workflow_id)
+    assert state["status"] == "awaiting_selection"
+    assert all("westwood_print" not in sellers_in(bundle) for bundle in state["data"]["bundles"])
+
+
+def sellers_in(bundle: dict) -> set[str]:
+    return {line["seller_id"] for line in bundle["lines"]}

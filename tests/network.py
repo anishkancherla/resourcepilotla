@@ -26,7 +26,7 @@ from uagents_core.contrib.protocols.chat import ChatAcknowledgement, ChatMessage
 
 from resourcepilot import clock
 from resourcepilot.config import ALL_AGENTS, PLATFORM_ROLES, SELLER_AGENTS
-from resourcepilot.store import MemoryStore
+from resourcepilot.store import DurableStore, MemoryStore
 
 ROOT = Path(__file__).resolve().parents[1]
 USER = "agent1qtestbuyer0000000000000000000000000000000000000000000000000"
@@ -93,7 +93,8 @@ class AgentNetwork:
     dropped: list[tuple[str, str]] = field(default_factory=list)
     offline: set[str] = field(default_factory=set)
     offset: timedelta = timedelta()
-    store: MemoryStore = field(default_factory=MemoryStore)
+    # MemoryStore lets tests inspect state directly; the Postgres run uses the async API.
+    store: Any = field(default_factory=MemoryStore)
 
     def address(self, key: str) -> str:
         return str(self.by_key[key].agent.address)
@@ -190,12 +191,15 @@ def load_modules(env: dict[str, str]) -> dict[str, ModuleType]:
 
 @contextmanager
 def agent_network(
-    monkeypatch: Any, env: dict[str, str], modules: dict[str, ModuleType]
+    monkeypatch: Any,
+    env: dict[str, str],
+    modules: dict[str, ModuleType],
+    store: DurableStore | None = None,
 ) -> Iterator[AgentNetwork]:
     """Give the already-loaded runtimes a fresh shared store and a controllable clock."""
     for key, value in env.items():
         monkeypatch.setenv(key, value)
-    network = AgentNetwork()
+    network = AgentNetwork(store=store) if store is not None else AgentNetwork()
     real_now = clock.utc_now
 
     def shifted_now() -> datetime:
