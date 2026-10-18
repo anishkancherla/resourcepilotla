@@ -111,7 +111,7 @@ def samples() -> None:
     show("Progress", cards.progress_card("demo", "campus_rooms", chain))
     show("Sample open rooms", cards.rooms_carousel("demo", SAMPLE_OPTIONS, "Example University"))
     show("Sample room detail", cards.room_detail("demo", SAMPLE_OPTIONS[0]))
-    show("Sample booking link", cards.room_link_receipt(SAMPLE_OPTIONS[0]), terminal=True)
+    show("Sample booking link", cards.room_link_receipt(SAMPLE_OPTIONS[0]))
     show("Sample housing", cards.housing_card(SAMPLE_HOUSING))
     prices = ["$1.00 by card (Stripe test mode)", "1 FET on the Fetch testnet"]
     show("Hall match offer", cards.housing_unlock_card("demo", SAMPLE_HOUSING, prices))
@@ -142,7 +142,7 @@ async def live_rooms(domain: str, found: dict[str, Any], rooms_http: Http) -> No
     school = found["school"]["school_name"]
     show(f"Open rooms at {domain}", cards.rooms_carousel("demo", options, school))
     show(f"Room detail at {domain}", cards.room_detail("demo", options[0]))
-    show(f"Booking link at {domain}", cards.room_link_receipt(options[0]), terminal=True)
+    show(f"Booking link at {domain}", cards.room_link_receipt(options[0]))
 
 
 async def live_wellness(domain: str, http: Http, rooms_http: Http) -> None:

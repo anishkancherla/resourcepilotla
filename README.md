@@ -38,6 +38,16 @@ school's booking link: **you book it with your own sign-in**. ResourcePilot neve
 - **Recovery is part of the product.** If a room is taken during the re-check, the Planner
   reroutes to the other open rooms. A lost task is retried once. If LibCal's live times fail, you
   get the school's booking link, never invented rooms.
+- **One paid step, checked by the seller.** The hall-by-hall housing match is the only paid step,
+  over Fetch's Agent Payment Protocol, in Stripe test mode or testnet FET. The Orchestrator checks
+  every payment with Stripe or the testnet itself and uses each transaction ID once, so a replayed
+  commit unlocks nothing twice.
+
+**Business model.** Rooms, wellness, and housing facts are free; students pay a small one-time fee
+for the hall match, which saves an evening of reading hall pages, rate tables, and PDFs. Longer
+term, schools' housing and student-affairs offices would pay to publish their own rooms, halls, and
+events to ResourcePilot directly instead of being crawled. Only the test-mode hall-match fee is
+built today.
 
 This repository uses public Fetch.ai packages and documentation only.
 
@@ -220,7 +230,8 @@ and never books anything.
 
 The test suite drives the real agent handlers in process: every role is loaded as its own module
 with its own address. Every live source (IPEDS, LibCal, Localist, and school websites) is served by
-offline fakes, and the ElevenLabs API is mocked, so no test touches the network or places a call.
+offline fakes, and ElevenLabs, Stripe, and the Fetch testnet are mocked, so no test touches the
+network, places a call, or makes a payment.
 Set `TEST_DATABASE_URL` to also run the store contract and the end-to-end network tests on real
 Postgres. CI does this.
 

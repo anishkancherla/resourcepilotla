@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 from zoneinfo import ZoneInfo
 
-# Times shown to people and seller opening hours are campus-local.
+# The form's day choices are computed in this zone.
 CAMPUS_TZ = ZoneInfo("America/Los_Angeles")
 
 

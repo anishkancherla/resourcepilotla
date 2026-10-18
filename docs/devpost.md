@@ -108,6 +108,30 @@ budget.
 
 You get a carousel of halls with matches first, and the apply link to your school's portal.
 
+### 💳 The paid hall match (test mode)
+
+The hall-by-hall match is the one paid step, and it runs on Fetch's
+[Agent Payment Protocol](https://innovationlab.fetch.ai/resources/docs/agent-transaction/agent-payment-protocol).
+The facts, the school's typical costs, and the apply link stay free.
+
+1. After **Verification** keeps at least one hall, the workflow pauses with an offer card: what
+   the match does, its one-time price, and what stays free. A school with no readable halls is
+   never charged.
+2. **Unlock my hall match** sends one `RequestPayment` from the Orchestrator, the only agent that
+   speaks the Payment Protocol. ASI:One shows its payment panel: a Stripe test card, or FET on the
+   Fetch testnet.
+3. The Orchestrator never takes the buyer's word for it. For Stripe, it reads the Checkout Session
+   back from Stripe: it must be the one made for this workflow, paid, in test mode, in USD, for
+   exactly the configured price. For FET, it reads the transaction from the testnet: it must have
+   succeeded and sent at least the price from the buyer's wallet to the Orchestrator's own wallet.
+4. Only then does it send `CompletePayment` and hand the **Planner** its task. Anything else gets
+   `CancelPayment` with a short reason, and the match stays locked.
+
+Each transaction ID is used once, ever, so a replayed commit can't unlock or charge anything
+twice. A double click opens one payment request. A Stripe live key stops the Orchestrator from
+starting, and FET is fixed to the testnet: **no real money moves**. The payment buys
+ResourcePilot's match, never housing, and never goes to a school.
+
 ### 📞 Emergency (demo)
 
 A demo drill of what an agent-placed emergency call could look like. Pick what's happening, where
@@ -124,6 +148,16 @@ refused outright.
 
 Your recent re-checked rooms and their booking links, read from the shared workflow store.
 
+## 💰 Business model
+
+Students get study rooms, wellness, and housing facts free, and pay a small one-time fee only for
+the hall-by-hall match that saves them an evening of clicking through hall pages, rate tables, and
+PDFs. Longer term, schools' housing and student-affairs offices pay to publish their own rooms,
+halls, and events to ResourcePilot directly, instead of being crawled.
+
+What runs today is the hall-match fee, in Stripe test mode and on the Fetch testnet. The school
+side is a plan, not something we've built.
+
 ## 🏗 Architecture
 
 ```text
@@ -135,6 +169,7 @@ Your recent re-checked rooms and their booking links, read from the shared workf
                    · picture cards            ├──▶ ③ Campus Rooms ───────────────▶ LibCal (live)
                    · workflow state           ├──▶ ④ Verification ───────────────▶ re-opens links + feeds
                    · re-check + reroute       ├──▶ ⑤ Planner
+                   · hall-match payment ──────┼────────────────────────────────▶ Stripe (test) · Fetch testnet
                           │                   └──▶ Emergency Dispatch ──────────▶ ElevenLabs ⇄ Twilio / SIP
                           ▼
                    Memory & Audit ──▶ Postgres (workflows, audit timeline, one-time claims, cache)
@@ -158,9 +193,10 @@ How a request moves:
 | --- | --- |
 | **Multi-agent collaboration** | 8 uAgents, each its own process and address, each owning one step. Only Campus Rooms reads room availability; only Emergency Dispatch talks to ElevenLabs. Not one chatbot wearing eight hats. |
 | **ASI:One + Chat Protocol** | The whole product runs inside one ASI:One conversation. Every agent speaks the Agent Chat Protocol and publishes its manifest. |
+| **Payment Protocol** | The Orchestrator is the seller in Fetch's `AgentPaymentProtocol` for one optional step, the hall match. It checks every payment with Stripe or the testnet itself, uses each transaction ID once, and cancels anything that doesn't check out. Test mode only. |
 | **Interactive cards** | Every reply is a picture card: a menu banner with compact service tiles, forms, progress cards with each agent's own art, room and hall carousels, booking links, and receipts. Selections carry stable workflow and option IDs. |
 | **Real-time data** | Live LibCal availability, re-checked right before the link. Hall details from the school's own pages. Events from the school's own calendar. IPEDS for school facts. |
-| **Error recovery** | A taken room reroutes to the others. No booking system found asks for a link. A LibCal outage falls back to the school's booking link, never invented rooms. Silent agents are retried once. |
+| **Error recovery** | A taken room reroutes to the others. No booking system found asks for a link. A LibCal outage falls back to the school's booking link, never invented rooms. Silent agents are retried once. A replayed payment commit unlocks nothing twice. |
 | **Safety** | Email local parts are stripped before anything is stored. Fetches are https-only, public-address-only, redirect-vetted, and byte- and time-capped. Page text is evidence, never instructions. |
 
 ## 🎨 Cards that look like campus
@@ -187,13 +223,15 @@ ResourcePilot never fetches an image itself.
 - **LibCal:** live room availability, read only by Campus Rooms.
 - **Localist:** public campus events calendars for the wellness card.
 - **pypdf** in a worker thread with a time limit: reads the yearly row of a hall's rate PDF.
+- **Agent Payment Protocol** from `uagents_core.contrib.protocols.payment`, with **Stripe**
+  Checkout in test mode and FET on the **Fetch stable testnet**, both verified by the Orchestrator.
 - **ElevenLabs** voice agents over **Twilio** or a **SIP trunk** for the emergency demo drill.
 - **Docker Compose:** Postgres plus eight independent agent containers, with CI running format,
   lint, type-check, and the tests.
 
 The test suite drives the real agent handlers in process, each role loaded as its own module with
-its own address. Every live source is served by offline fakes and ElevenLabs is mocked, so no test
-touches the network or places a call.
+its own address. Every live source is served by offline fakes, and ElevenLabs, Stripe, and the
+testnet are mocked, so no test touches the network, places a call, or makes a payment.
 
 ## 🧗 Challenges we ran into
 
@@ -209,10 +247,14 @@ touches the network or places a call.
   anything. Every fetch checks that the resolved address is public, vets every redirect, caps
   bytes, and runs on a fetch and time budget. Page text is treated as untrusted evidence: we keep
   links and capped fields, never instructions.
-- **Fitting the Agentverse Mailbox limit.** Our first build had 13 agents, including demo seller
+- **Fitting the Agentverse Mailbox limit.** Our first build had 15 agents, including demo seller
   shops and an escrow checkout. The Basic plan allows 8 Mailbox agents, and a fake shop isn't a
-  real service, so we cut the payments and the shops and rebuilt around eight agents that each do
-  real work.
+  real service, so we cut the shops and the escrow and rebuilt around eight agents that each do
+  real work. Payments came back as one honest step: the hall match, paid to ResourcePilot, never
+  to a shop or a school.
+- **Not trusting a payment message.** A `CommitPayment` is just a claim from the buyer. We check
+  each one with Stripe or the testnet ourselves, bind the checkout to its workflow, and use each
+  transaction ID once, so a replay or someone else's payment can't unlock anything.
 - **Cards with pictures.** The predefined card kinds can't show images, so our forms and the
   emergency review are custom cards, kept under the 64KB payload and eight-level depth limits.
 - **Making a phone call safe to demo.** One button press, one call, never retried, to one number
@@ -226,6 +268,8 @@ touches the network or places a call.
 - **Every hall a school lists**, matched to your criteria, with a ruled-out hall hidden only when
   its own page rules it out.
 - **Eight agents with real jobs**, real message schemas, and one audit trail across all of them.
+- **A payment you can't fool:** every hall-match payment is checked with Stripe or the testnet by
+  the Orchestrator itself, and a replayed commit unlocks nothing twice.
 - **Honest by design:** no invented rooms, no guessed booking systems, no fake reservations, a
   paid hall match that runs in test mode and never pays your school, and a demo call that can
   never reach 911.
@@ -260,4 +304,4 @@ touches the network or places a call.
 ## Built with
 
 agentverse · asi:one · asyncpg · docker · elevenlabs · fetch.ai · httpx · ipeds · libcal ·
-localist · postgresql · pypdf · python · sip · twilio · uagents
+localist · postgresql · pypdf · python · sip · stripe · twilio · uagents

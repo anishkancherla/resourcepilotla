@@ -184,6 +184,18 @@ NO_MENU_BUTTON = {cards.school_card, cards.welcome_card}
 @pytest.mark.parametrize(
     "factory",
     [
+        lambda: cards.housing_unlock_card("workflow-1", HALLS, ["$1.00"]),
+        lambda: cards.housing_payment_card("workflow-1", ["$1.00"]),
+    ],
+)
+def test_every_payment_card_says_what_the_money_buys(factory) -> None:
+    text = json.dumps(factory()[1])
+    assert cards.MATCH_NOT_HOUSING in text and cards.TEST_MONEY in text
+
+
+@pytest.mark.parametrize(
+    "factory",
+    [
         *(factory for factory, _ in FACTORIES if factory not in NO_MENU_BUTTON),
         lambda: cards.school_card("purdue.edu"),
         lambda: cards.housing_unlock_card("workflow-1", HALLS, ["$1.00"]),
@@ -814,6 +826,15 @@ def test_menu_is_a_compact_grid_with_my_bookings_and_the_crisis_line() -> None:
     assert [selection for _, selection in cards.card_buttons(menu)][-1] == {
         "action": "show_bookings"
     }
+    # The services are equal choices, so every tile's button looks the same.
+    assert [tile["children"][-1]["primary"] for tile in tiles] == [False] * 5
+    assert [tile["children"][-1]["label"] for tile in tiles] == [
+        "Open study rooms",
+        "Open health & wellness",
+        "Open campus housing",
+        "Open emergency (demo)",
+        "Open my bookings",
+    ]
     assert children[-1]["value"] == cards.CRISIS_TEXT
 
 

@@ -474,6 +474,8 @@ async def test_an_underpaid_fet_transfer_is_cancelled(network, monkeypatch) -> N
     assert "less than" in str(sent(network, CancelPayment)[-1].reason)
     assert sent(network, CompletePayment) == []
     assert "planner" not in completed_roles(network)
+    _, declined, _ = last_card(network, "custom")
+    assert "never your school" in json.dumps(declined)
 
 
 async def test_a_commit_from_someone_else_is_cancelled(network, monkeypatch) -> None:

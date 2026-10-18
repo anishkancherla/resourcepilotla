@@ -1,8 +1,10 @@
 """Bounded, cached HTTP for the agents that call live public sources.
 
-Only the Campus Researcher, Seller Verification (official-link re-checks), and the Campus Rooms
-seller use this. Fetched content is untrusted evidence. Errors become ``ProviderError`` messages
-that are safe to show in a card: they never include request headers or raw response bodies.
+The Campus Researcher, Verification (official-link re-checks), and Campus Rooms use this for
+public pages; the Emergency Dispatcher (ElevenLabs) and the Orchestrator's payment checks (Stripe
+and the Fetch testnet) use its client. Fetched content is untrusted evidence. Errors become
+``ProviderError`` messages that are safe to show in a card: they never include request headers or
+raw response bodies.
 """
 
 from __future__ import annotations

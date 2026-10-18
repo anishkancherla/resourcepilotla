@@ -1083,7 +1083,8 @@ async def _decline_payment(
         ctx,
         sender,
         "Payment not confirmed",
-        f"{reason}. The hall match is still locked, and the facts are free.",
+        f"{reason}. The hall match is still locked, and the facts are free. "
+        + cards.MATCH_NOT_HOUSING,
         badge="Not confirmed",
         variant="warning",
         buttons=[

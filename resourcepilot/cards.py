@@ -771,11 +771,7 @@ def welcome_card(school: str = "") -> tuple[str, dict[str, Any]]:
             title,
             body,
             (badge, variant),
-            _button(
-                f"Open {title.lower()}",
-                {"action": "open_service", "service": service},
-                primary=service == "rooms",
-            ),
+            _button(f"Open {title.lower()}", {"action": "open_service", "service": service}),
         )
         for service, title, badge, variant, body in SERVICES_MENU
     ]
@@ -784,7 +780,7 @@ def welcome_card(school: str = "") -> tuple[str, dict[str, Any]]:
             "My bookings",
             "Your recent room booking links.",
             ("Yours only", "info"),
-            _button("My bookings", {"action": "show_bookings"}),
+            _button("Open my bookings", {"action": "show_bookings"}),
         )
     )
     for start in range(0, len(tiles), 2):
@@ -1644,7 +1640,20 @@ def housing_unlock_card(
             "criteria, with each hall's photo, features, and listed price.",
             "style": "body",
         },
-        *_rows([{"label": "Price", "value": " or ".join(prices)}]),
+        *_rows(
+            [
+                {
+                    "label": "The match",
+                    "value": "Each hall scored on each of your criteria: a match, not listed, or "
+                    "ruled out by its own page. Matches first.",
+                },
+                {"label": "One-time price", "value": " or ".join(prices)},
+                {
+                    "label": "Free either way",
+                    "value": "Housing facts, the school's typical costs, and the apply link",
+                },
+            ]
+        ),
         {"type": "text", "value": MATCH_NOT_HOUSING, "style": "muted"},
         {"type": "text", "value": TEST_MONEY, "style": "muted"},
         _buttons(
@@ -1669,6 +1678,8 @@ def housing_payment_card(workflow_id: str, prices: list[str]) -> tuple[str, dict
         "Pay in the payment panel ASI:One shows with this message ("
         + " or ".join(prices)
         + "). Once ResourcePilot confirms it, the Planner matches your halls. "
+        + MATCH_NOT_HOUSING
+        + " "
         + TEST_MONEY,
         badge="Payment requested",
         buttons=[
