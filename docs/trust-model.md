@@ -83,10 +83,6 @@ and [resourcepilot/http.py](../resourcepilot/http.py):
   characters, tags and control characters stripped), start time, location (60 characters), and
   its calendar link, which must pass the same host rules. Descriptions are never read or shown.
   These fields are display data and never instructions.
-- **Images.** Card art is served from this repository's `assets/` over https, and the student's
-  browser loads it. A wellness event's photo is passed through only when it is https on the
-  school's domain or Localist's image host (`localist-images.azureedge.net`). ResourcePilot never
-  fetches an image itself, so a photo cannot reach an internal address through the agents.
 - **Health.** The wellness form asks only for the school email, a day, and a duration. Nothing
   about a student's health is asked, stored, or logged, and ResourcePilot books no health or
   counseling appointments. The 988 and 911 crisis line is static text on every wellness card and

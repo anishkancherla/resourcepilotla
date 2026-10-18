@@ -4,7 +4,6 @@ import json
 from datetime import UTC, datetime
 from uuid import uuid4
 
-from network import click, has_action, last_with
 from provider_fakes import SEARCH_DAY, dumps
 from uagents_core.contrib.protocols.chat import ChatMessage, TextContent
 
@@ -55,11 +54,11 @@ async def test_every_reply_is_a_card_and_free_text_gets_the_menu(network) -> Non
     assert "buttons and forms" in narration
     assert network.store.workflows == {}  # a sentence never starts a request
     await network.send_user(chat("can I book a study room"))
-    _, form, _ = last_with(network, "submit_form")
-    assert click(form, "submit_form")["service"] == "rooms"
+    _, form, _ = last_card(network, "form")
+    assert form["submit_cta"]["selection"]["service"] == "rooms"
     for service in ("wellness", "housing", "bundle"):
         await network.send_user(chat({"action": "open_service", "service": service}))
-        assert click(last_with(network, "submit_form")[1], "submit_form")["service"] == service
+        assert last_card(network, "form")[1]["submit_cta"]["selection"]["service"] == service
     assert len(network.cards()) == len(network.texts())  # no plain-text reply anywhere
 
 
@@ -110,8 +109,8 @@ async def test_silent_seller_is_reported_after_the_quote_window(network) -> None
 async def test_incomplete_form_asks_again_with_the_same_form(network) -> None:
     await network.send_user(chat({"action": "submit_form", "service": "bundle", "posters": "5"}))
     kind, form, narration = last_card(network)
-    assert kind == "custom"
-    assert click(form, "submit_form")["service"] == "bundle"
+    assert kind == "form"
+    assert form["submit_cta"]["selection"]["service"] == "bundle"
     assert "Missing" in narration
 
 
@@ -135,8 +134,9 @@ async def test_study_room_flow_ends_in_a_free_booking_link(network) -> None:
     _, detail, _ = last_card(network, "detail")
     assert detail["ctas"][0]["label"] == "Re-check this room"
     await network.send_user(chat(detail["ctas"][0]["selection"]))
-    _, review, _ = last_with(network, "confirm_free")
-    await network.send_user(chat(click(review, "confirm_free")))
+    _, review, _ = last_card(network, "review")
+    assert review["approve_cta"]["selection"]["action"] == "confirm_free"
+    await network.send_user(chat(review["approve_cta"]["selection"]))
     _, receipt, _ = last_card(network, "detail")
     assert receipt["title"] == "Your booking link"
     assert "https://calendar.lib.purdue.edu/space/102" in json.dumps(receipt)
@@ -160,7 +160,7 @@ async def test_room_taken_during_recheck_goes_back_to_the_rooms(network) -> None
     _, detail, _ = last_card(network, "detail")
     network.use_http(booked={"102@12:00"})
     await network.send_user(chat(detail["ctas"][0]["selection"]))
-    assert not [card for card in network.cards() if has_action(card, "confirm_free")]
+    assert not [card for card in network.cards() if card[0] == "review"]
     assert any("just booked" in text for text in network.texts())
     assert last_card(network)[0] == "carousel"
     assert network.store.payments == {}
@@ -226,8 +226,8 @@ async def test_wellness_flow_shows_crisis_rooms_and_events_then_a_link(network) 
     assert detail["title"] == "Meditation Room"
     assert detail["ctas"][0]["label"] == "Re-check this room"
     await network.send_user(chat(detail["ctas"][0]["selection"]))
-    _, review, _ = last_with(network, "confirm_free")
-    await network.send_user(chat(click(review, "confirm_free")))
+    _, review, _ = last_card(network, "review")
+    await network.send_user(chat(review["approve_cta"]["selection"]))
     _, receipt, _ = last_card(network, "detail")
     assert "https://calendar.lib.purdue.edu/space/104" in json.dumps(receipt)
     assert network.store.payments == {} and network.store.escrow == {}

@@ -1,7 +1,5 @@
 # ResourcePilot Campus Researcher
 
-<img src="https://raw.githubusercontent.com/kevinjylin/resourcepilotla/main/assets/avatars/researcher.jpg" alt="ResourcePilot Campus Researcher" width="160">
-
 Works out where a student's own school books study rooms and runs housing, starting only from the
 domain of their school email (the part before `@` is never kept). It matches the domain to a US
 institution in IPEDS, then finds the library's room-booking system. It checks a short hand-verified

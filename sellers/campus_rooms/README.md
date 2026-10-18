@@ -1,7 +1,5 @@
 # Campus Rooms (live library rooms)
 
-<img src="https://raw.githubusercontent.com/kevinjylin/resourcepilotla/main/assets/avatars/campus_rooms.jpg" alt="Campus Rooms (live library rooms)" width="160">
-
 An independent seller agent that quotes real open library study rooms at the student's own school,
 at any school whose room system the Campus Researcher found. For LibCal schools it reads the public
 room list and open slots. For other systems it offers the school's booking page, because that

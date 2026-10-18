@@ -8,7 +8,6 @@ ASI:One silently falls back to plain text when a payload has an unexpected shape
 from __future__ import annotations
 
 import json
-import os
 import re
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -37,83 +36,6 @@ CARD_LIMIT_BYTES = 64 * 1024
 CUSTOM_CARD_MAX_DEPTH = 8
 CARD_KINDS = {"carousel", "detail", "form", "review", "custom"}
 ASI_ONE_URL = "https://asi1.ai/"
-# Card art is served from this public repository; see assets/PROMPTS.md to swap any image.
-DEFAULT_IMAGE_BASE = "https://raw.githubusercontent.com/kevinjylin/resourcepilotla/main/assets/"
-# Every name is assets/cards/<name>.jpg, drawn by scripts/make_card_art.py.
-ART = frozenset(
-    {
-        "menu-banner",
-        *(f"svc-{name}" for name in ("rooms", "wellness", "housing", "bundle", "bookings")),
-        "room-study-1",
-        "room-study-2",
-        "room-study-3",
-        "room-wellness",
-        "wellness-hero",
-        "event-default",
-        *(f"cat-{name}" for name in ("camera", "microphone", "tripod", "podcast-room", "posters")),
-        *(
-            f"hero-{name}"
-            for name in (
-                "holds",
-                "payment",
-                "receipt",
-                "recovery",
-                "refund",
-                "vetting",
-                "link",
-                "info",
-                "warning",
-            )
-        ),
-        *(f"choice-{name}" for name in ("none", "dslr", "mirrorless", "podcast", "study")),
-        *(
-            f"role-{name}"
-            for name in (
-                "orchestrator",
-                "intake",
-                "researcher",
-                "discovery",
-                "verification",
-                "analysis",
-                "planner",
-                "fulfillment",
-                "memory-audit",
-            )
-        ),
-        *(
-            f"seller-{name}"
-            for name in (
-                "westwood-print",
-                "gayley-copy",
-                "flash-prints",
-                "gear-share",
-                "studio-rooms",
-                "campus-rooms",
-            )
-        ),
-    }
-)
-CATEGORY_ART = {
-    "camera": "cat-camera",
-    "microphone": "cat-microphone",
-    "tripod": "cat-tripod",
-    "podcast_room": "cat-podcast-room",
-    "posters": "cat-posters",
-    "study_room": "room-study-1",
-    "wellness_room": "room-wellness",
-}
-STAGE_ART = {
-    "intake": "role-intake",
-    "researcher": "role-researcher",
-    "link": "hero-link",
-    "discovery": "role-discovery",
-    "verification": "role-verification",
-    "analysis": "role-analysis",
-    "planner": "role-planner",
-    "holds": "role-fulfillment",
-    "payment": "hero-payment",
-    "booking": "role-fulfillment",
-}
 
 PREDEFINED_FIELDS = {
     "carousel": {"title", "subtitle", "items"},
@@ -308,52 +230,6 @@ def card_message(
     )
 
 
-def card_buttons(payload: dict[str, Any]) -> list[tuple[str, dict[str, Any]]]:
-    """Every (label, selection) a person can click on a card, in order, for any card kind."""
-    found: list[tuple[str, dict[str, Any]]] = []
-
-    def walk(node: Any) -> None:
-        if isinstance(node, list):
-            for child in node:
-                walk(child)
-            return
-        if not isinstance(node, dict):
-            return
-        if node.get("type") == "button":
-            found.append((str(node["label"]), dict(node["action"]["selection"])))
-        for key in ("primary_cta", "submit_cta", "approve_cta", "reject_cta"):
-            cta = node.get(key)
-            if isinstance(cta, dict) and "selection" in cta:
-                found.append((str(cta.get("label", "")), dict(cta["selection"])))
-        for cta in node.get("ctas") or []:
-            found.append((str(cta.get("label", "")), dict(cta["selection"])))
-        for key in ("root", "children", "items"):
-            walk(node.get(key))
-
-    walk(payload)
-    return found
-
-
-def card_inputs(payload: dict[str, Any]) -> list[dict[str, Any]]:
-    """Every input and picture-tile field on a custom card, or the fields of a form card."""
-    if "fields" in payload:
-        return list(payload["fields"])
-    found: list[dict[str, Any]] = []
-
-    def walk(node: Any) -> None:
-        if isinstance(node, list):
-            for child in node:
-                walk(child)
-        elif isinstance(node, dict):
-            if node.get("type") in {"input", "choice_grid"}:
-                found.append(node)
-            walk(node.get("root"))
-            walk(node.get("children"))
-
-    walk(payload)
-    return found
-
-
 def parse_selection(text: str, known_actions: tuple[str, ...] = KNOWN_ACTIONS) -> dict[str, Any]:
     """Parse direct JSON selections first, then a bounded allowlist of prose actions."""
     raw = re.sub(r"^(?:@\S+\s+)+", "", (text or "").strip())
@@ -399,129 +275,6 @@ def _zone_time(value: str, zone: ZoneInfo = CAMPUS_TZ) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Art
-# ---------------------------------------------------------------------------
-
-
-def image_base() -> str:
-    """Where card art is served from; ``CARD_IMAGE_BASE=`` (empty) turns images off."""
-    base = os.getenv("CARD_IMAGE_BASE", DEFAULT_IMAGE_BASE).strip()
-    return base if base.startswith("https://") else ""
-
-
-def art(name: str) -> str | None:
-    if name not in ART:
-        raise KeyError(f"unknown card art: {name}")
-    base = image_base()
-    return f"{base.rstrip('/')}/cards/{name}.jpg" if base else None
-
-
-def agent_art(key: str) -> str:
-    """The card art for a platform role or seller, by its identity key."""
-    name = key.replace("_", "-")
-    return f"role-{name}" if f"role-{name}" in ART else f"seller-{name}"
-
-
-def _image(name: str, alt: str = "") -> list[dict[str, Any]]:
-    """A 16:9 image element, or nothing when images are off."""
-    url = art(name)
-    if not url:
-        return []
-    return [{"type": "image", "src": url, "alt": alt or name, "aspect_ratio": "16:9"}]
-
-
-def _with_hero(card: tuple[str, dict[str, Any]], name: str, alt: str = "") -> tuple[str, dict]:
-    """Give any card a picture. Forms and reviews cannot carry one, so they become custom cards."""
-    kind, payload = card
-    if kind == "detail":
-        url = art(name)
-        return kind, ({"hero_image": url, **payload} if url else payload)
-    if kind == "form":
-        return _form_to_custom(payload, name, alt)
-    if kind == "review":
-        return _review_to_custom(payload, name, alt)
-    if kind == "custom":
-        root = dict(payload["root"])
-        root["children"] = [*_image(name, alt), *root["children"]]
-        return kind, {"root": root}
-    return card
-
-
-def _form_to_custom(
-    payload: dict[str, Any],
-    hero: str,
-    alt: str = "",
-    grids: dict[str, list[dict[str, str]]] | None = None,
-) -> tuple[str, dict[str, Any]]:
-    """The same fields and submit selection as a form card, with a picture and image tiles."""
-    children: list[dict[str, Any]] = [*_image(hero, alt)]
-    for field in payload["fields"]:
-        if grids and field["name"] in grids:
-            children.append(
-                {"type": "choice_grid", "name": field["name"], "choices": grids[field["name"]]}
-            )
-        else:
-            children.append({"type": "input", **field})
-    cta = payload["submit_cta"]
-    children.append(_button(cta["label"], cta["selection"], primary=True))
-    return "custom", {"root": {"type": "section", "title": payload["title"], "children": children}}
-
-
-def _rows(rows: list[dict[str, str]]) -> list[dict[str, Any]]:
-    return [
-        {
-            "type": "group",
-            "direction": "column",
-            "children": [
-                {"type": "text", "value": row["label"], "style": "muted"},
-                {"type": "text", "value": row["value"], "style": "body"},
-            ],
-        }
-        for row in rows
-    ]
-
-
-def _review_to_custom(
-    payload: dict[str, Any], hero: str, alt: str = ""
-) -> tuple[str, dict[str, Any]]:
-    """The same rows and approve/reject selections as a review card, under a picture."""
-    approve, reject = payload["approve_cta"], payload["reject_cta"]
-    children = [
-        *_image(hero, alt),
-        *_rows(payload["summary_rows"]),
-        _buttons(
-            [(approve["label"], approve["selection"]), (reject["label"], reject["selection"])]
-        ),
-    ]
-    return "custom", {"root": {"type": "section", "title": payload["title"], "children": children}}
-
-
-def _item_image(name: str) -> dict[str, str]:
-    url = art(name)
-    return {"image": url} if url else {}
-
-
-def _line_art(bundle: dict[str, Any]) -> str:
-    """A bundle's picture: its main paid item, else its room."""
-    order = (
-        "camera",
-        "podcast_room",
-        "posters",
-        "microphone",
-        "tripod",
-        "study_room",
-        "wellness_room",
-    )
-    categories = {str(line.get("category")) for line in bundle["lines"]}
-    return next((CATEGORY_ART[name] for name in order if name in categories), "svc-bundle")
-
-
-def _choice(value: str, label: str, name: str) -> dict[str, str]:
-    url = art(name)
-    return {"value": value, "label": label, **({"image": url} if url else {})}
-
-
-# ---------------------------------------------------------------------------
 # Profile status, menu, and notices
 # ---------------------------------------------------------------------------
 
@@ -534,14 +287,12 @@ def status_card(
     badges: list[tuple[str, str]] | None = None,
     facts: list[str] | None = None,
     extra_buttons: list[dict[str, Any]] | None = None,
-    image: str | None = None,
 ) -> tuple[str, dict[str, Any]]:
     """Profile chat card shared by specialists and sellers; it points to the Orchestrator."""
-    children: list[dict[str, Any]] = [*(_image(image, title) if image else [])]
-    children.extend(
+    children: list[dict[str, Any]] = [
         {"type": "badge", "label": label, "variant": variant}
         for label, variant in (badges or [("Online", "success")])
-    )
+    ]
     children.append({"type": "text", "value": responsibility, "style": "body"})
     children.extend({"type": "text", "value": fact, "style": "muted"} for fact in facts or [])
     children.append(
@@ -604,23 +355,6 @@ SERVICES_MENU = (
 )
 
 
-def _tile(
-    image: str, title: str, body: str, badge: tuple[str, str], button: dict[str, Any]
-) -> dict[str, Any]:
-    """One picture tile in the services grid, like the Welcome Week hubs on ASI:One."""
-    return {
-        "type": "group",
-        "direction": "column",
-        "children": [
-            *_image(image, title),
-            {"type": "heading", "value": title, "level": 3},
-            {"type": "badge", "label": badge[0], "variant": badge[1]},
-            {"type": "text", "value": body, "style": "muted"},
-            button,
-        ],
-    }
-
-
 def welcome_card() -> tuple[str, dict[str, Any]]:
     """The campus services menu, in the spirit of Fetch's Welcome Week agents."""
     children: list[dict[str, Any]] = [
@@ -633,32 +367,26 @@ def welcome_card() -> tuple[str, dict[str, Any]]:
             "style": "body",
         }
     ]
-    tiles = [
-        _tile(
-            f"svc-{service}",
-            title,
-            body,
-            (badge, variant),
-            _button(
-                f"Open {title.lower()}",
-                {"action": "open_service", "service": service},
-                primary=service == "rooms",
-            ),
+    for service, title, badge, variant, body in SERVICES_MENU:
+        children.append(
+            {
+                "type": "group",
+                "direction": "column",
+                "children": [
+                    {"type": "divider"},
+                    {"type": "heading", "value": title, "level": 3},
+                    {"type": "badge", "label": badge, "variant": variant},
+                    {"type": "text", "value": body, "style": "muted"},
+                    _button(
+                        f"Open {title.lower()}",
+                        {"action": "open_service", "service": service},
+                        primary=service == "rooms",
+                    ),
+                ],
+            }
         )
-        for service, title, badge, variant, body in SERVICES_MENU
-    ]
-    tiles.append(
-        _tile(
-            "svc-bookings",
-            "My bookings",
-            "Your recent room links and bundle receipts, from ResourcePilot's audit trail.",
-            ("Yours only", "info"),
-            _button("My bookings", {"action": "show_bookings"}),
-        )
-    )
-    children[:0] = _image("menu-banner", "ResourcePilot campus services")
-    for start in range(0, len(tiles), 2):
-        children.append({"type": "group", "direction": "row", "children": tiles[start : start + 2]})
+    children.append({"type": "divider"})
+    children.append(_button("My bookings", {"action": "show_bookings"}))
     children.append({"type": "text", "value": CRISIS_TEXT, "style": "muted"})
     return "custom", {
         "root": {"type": "section", "title": "ResourcePilot campus services", "children": children}
@@ -678,11 +406,7 @@ def notice_card(
         children.append({"type": "badge", "label": badge, "variant": variant})
     children.append({"type": "text", "value": body, "style": "body"})
     children.append(_buttons(buttons or [("Start over", {"action": "start_over"})]))
-    return _with_hero(
-        ("custom", {"root": {"type": "section", "title": title, "children": children}}),
-        "hero-warning" if variant == "warning" else "hero-info",
-        title,
-    )
+    return "custom", {"root": {"type": "section", "title": title, "children": children}}
 
 
 def error_card(message: str, *, service: str | None = None) -> tuple[str, dict[str, Any]]:
@@ -731,104 +455,62 @@ def _day_options(days: list[tuple[str, str]]) -> list[tuple[str, str]]:
 
 
 def rooms_form(days: list[tuple[str, str]] | None = None) -> tuple[str, dict[str, Any]]:
-    return _with_hero(
-        (
-            "form",
-            {
-                "title": "Find a study room at your school",
-                "fields": [
-                    _email_field(),
-                    _select("day", "Day", _day_options(days or upcoming_days()), required=True),
-                    _select(
-                        "window",
-                        "Time of day",
-                        [(key, value[0]) for key, value in WINDOWS.items()],
-                        required=True,
-                    ),
-                    _select("duration", "How long", list(ROOM_DURATIONS.items()), required=True),
-                    _select("group_size", "People", [(str(n), str(n)) for n in range(1, 13)]),
-                ],
-                "submit_cta": {
-                    "label": "Find open rooms",
-                    "selection": {"action": "submit_form", "service": "rooms"},
-                },
-            },
-        ),
-        "svc-rooms",
-    )
+    return "form", {
+        "title": "Find a study room at your school",
+        "fields": [
+            _email_field(),
+            _select("day", "Day", _day_options(days or upcoming_days()), required=True),
+            _select(
+                "window",
+                "Time of day",
+                [(key, value[0]) for key, value in WINDOWS.items()],
+                required=True,
+            ),
+            _select("duration", "How long", list(ROOM_DURATIONS.items()), required=True),
+            _select("group_size", "People", [(str(n), str(n)) for n in range(1, 13)]),
+        ],
+        "submit_cta": {
+            "label": "Find open rooms",
+            "selection": {"action": "submit_form", "service": "rooms"},
+        },
+    }
 
 
 def wellness_form(days: list[tuple[str, str]] | None = None) -> tuple[str, dict[str, Any]]:
     """No health questions: only the school, a day, and how long a quiet room is needed."""
-    kind, payload = _form_to_custom(
-        {
-            "title": "Health & wellness at your school",
-            "fields": [
-                _email_field(),
-                _select("day", "Day", _day_options(days or upcoming_days()), required=True),
-                _select(
-                    "window",
-                    "Time of day",
-                    [(key, value[0]) for key, value in WINDOWS.items()],
-                    required=True,
-                ),
-                _select(
-                    "duration", "Quiet room for", list(WELLNESS_DURATIONS.items()), required=True
-                ),
-            ],
-            "submit_cta": {
-                "label": "Find rooms and events",
-                "selection": {"action": "submit_form", "service": "wellness"},
-            },
+    return "form", {
+        "title": f"Health & wellness at your school. {CRISIS_TEXT}",
+        "fields": [
+            _email_field(),
+            _select("day", "Day", _day_options(days or upcoming_days()), required=True),
+            _select(
+                "window",
+                "Time of day",
+                [(key, value[0]) for key, value in WINDOWS.items()],
+                required=True,
+            ),
+            _select("duration", "Quiet room for", list(WELLNESS_DURATIONS.items()), required=True),
+        ],
+        "submit_cta": {
+            "label": "Find rooms and events",
+            "selection": {"action": "submit_form", "service": "wellness"},
         },
-        "svc-wellness",
-        "Health & wellness",
-    )
-    # The crisis line comes before everything else, image included.
-    payload["root"]["children"][:0] = [
-        {"type": "badge", "label": "Crisis help · 24/7", "variant": "warning"},
-        {"type": "text", "value": CRISIS_TEXT, "style": "body"},
-    ]
-    return kind, payload
+    }
 
 
 def housing_form() -> tuple[str, dict[str, Any]]:
-    return _with_hero(
-        (
-            "form",
-            {
-                "title": "Housing at your school",
-                "fields": [_email_field()],
-                "submit_cta": {
-                    "label": "Look up housing",
-                    "selection": {"action": "submit_form", "service": "housing"},
-                },
-            },
-        ),
-        "svc-housing",
-    )
+    return "form", {
+        "title": "Housing at your school",
+        "fields": [_email_field()],
+        "submit_cta": {
+            "label": "Look up housing",
+            "selection": {"action": "submit_form", "service": "housing"},
+        },
+    }
 
 
 def bundle_form(days: list[tuple[str, str]] | None = None) -> tuple[str, dict[str, Any]]:
-    """Camera and room are picture tiles; everything else is the same inputs as before."""
-    grids = {
-        "camera": [
-            _choice("none", "No camera", "choice-none"),
-            _choice("any", "Any camera", "cat-camera"),
-            _choice("dslr", "DSLR", "choice-dslr"),
-            _choice("mirrorless", "Mirrorless", "choice-mirrorless"),
-        ],
-        "room": [
-            _choice("none", "No room", "choice-none"),
-            _choice("podcast_room", "Podcast studio", "choice-podcast"),
-            _choice("study_room", "Free room at my school", "choice-study"),
-        ],
-    }
-    return _form_to_custom(_bundle_fields(days), "svc-bundle", "Project bundle", grids)
-
-
-def _bundle_fields(days: list[tuple[str, str]] | None) -> dict[str, Any]:
-    return {
+    return "form", {
         "title": "Demo bundle · UCLA-area demo shops",
         "fields": [
             _select(
@@ -897,39 +579,33 @@ def room_link_card(workflow_id: str, school: str, service: str) -> tuple[str, di
     if service == "bundle":
         actions.append(("Skip the room", {"action": "skip_room", "workflow_id": workflow_id}))
     actions.append(("Start over", {"action": "start_over"}))
-    return _with_hero(
-        (
-            "custom",
-            {
-                "root": {
-                    "type": "section",
-                    "title": f"Where does {school} book study rooms?",
-                    "children": [
-                        {"type": "badge", "label": "Link needed", "variant": "warning"},
-                        {
-                            "type": "text",
-                            "value": (
-                                "The Campus Researcher checked your library's site and did not "
-                                "find a room-booking system it recognizes. Paste the link you use "
-                                "to book a room and it will check that link instead of guessing."
-                            ),
-                            "style": "body",
-                        },
-                        {
-                            "type": "input",
-                            "name": "booking_link",
-                            "kind": "text",
-                            "label": "Room booking link",
-                            "required": True,
-                            "placeholder": "https://",
-                        },
-                        _buttons(actions),
-                    ],
-                }
-            },
-        ),
-        "hero-link",
-    )
+    return "custom", {
+        "root": {
+            "type": "section",
+            "title": f"Where does {school} book study rooms?",
+            "children": [
+                {"type": "badge", "label": "Link needed", "variant": "warning"},
+                {
+                    "type": "text",
+                    "value": (
+                        "The Campus Researcher checked your library's site and did not find a "
+                        "room-booking system it recognizes. Paste the link you use to book a "
+                        "room and it will check that link instead of guessing."
+                    ),
+                    "style": "body",
+                },
+                {
+                    "type": "input",
+                    "name": "booking_link",
+                    "kind": "text",
+                    "label": "Room booking link",
+                    "required": True,
+                    "placeholder": "https://",
+                },
+                _buttons(actions),
+            ],
+        }
+    }
 
 
 EXAMPLE_FIELDS = {
@@ -990,10 +666,7 @@ def progress_card(
     children.append(
         _button("Refresh status", {"action": "show_status", "workflow_id": workflow_id})
     )
-    return _with_hero(
-        ("custom", {"root": {"type": "section", "title": "Agents at work", "children": children}}),
-        STAGE_ART.get(stage, "hero-info"),
-    )
+    return "custom", {"root": {"type": "section", "title": "Agents at work", "children": children}}
 
 
 def _sellers(bundle: dict[str, Any]) -> str:
@@ -1019,7 +692,6 @@ def bundle_carousel(
         items.append(
             {
                 "id": bundle["bundle_id"],
-                **_item_image(_line_art(bundle)),
                 "title": bundle["label"],
                 "subtitle": _sellers(bundle),
                 "secondary_text": f"{usd(bundle['total_cents'])} · {_walk_text(bundle)}",
@@ -1060,7 +732,6 @@ def rooms_carousel(
         items.append(
             {
                 "id": option["bundle_id"],
-                **_item_image(f"room-study-{index % 3 + 1}"),
                 "title": str(line["name"]),
                 "subtitle": str(line.get("slot_label") or line.get("location_label") or ""),
                 "secondary_text": f"Free · {seats} · {line.get('location_label') or ''}",
@@ -1186,9 +857,7 @@ def bundle_detail(
             for line in bundle["lines"]
         )
     title = str(bundle["lines"][0]["name"]) if rooms else str(bundle["label"])
-    return _with_hero(
-        ("detail", {"title": title, "summary_rows": rows, "ctas": ctas}), _line_art(bundle)
-    )
+    return "detail", {"title": title, "summary_rows": rows, "ctas": ctas}
 
 
 def holds_review_card(
@@ -1202,25 +871,19 @@ def holds_review_card(
                 "value": f"Still open as of {_zone_time(utc_now().isoformat(), brief_zone(brief))}",
             }
         )
-        return _with_hero(
-            (
-                "review",
-                {
-                    "title": "Still open",
-                    "summary_rows": rows,
-                    "approve_cta": {
-                        "label": "Get booking link",
-                        "primary": True,
-                        "selection": {"action": "confirm_free", "workflow_id": workflow_id},
-                    },
-                    "reject_cta": {
-                        "label": "Pick another",
-                        "selection": {"action": "release_holds", "workflow_id": workflow_id},
-                    },
-                },
-            ),
-            "hero-holds" if int(bundle["total_cents"]) else _line_art(bundle),
-        )
+        return "review", {
+            "title": "Still open",
+            "summary_rows": rows,
+            "approve_cta": {
+                "label": "Get booking link",
+                "primary": True,
+                "selection": {"action": "confirm_free", "workflow_id": workflow_id},
+            },
+            "reject_cta": {
+                "label": "Pick another",
+                "selection": {"action": "release_holds", "workflow_id": workflow_id},
+            },
+        }
     rows.extend(
         [
             {
@@ -1239,25 +902,19 @@ def holds_review_card(
             },
         ]
     )
-    return _with_hero(
-        (
-            "review",
-            {
-                "title": "Everything is on hold",
-                "summary_rows": rows,
-                "approve_cta": {
-                    "label": "Choose payment",
-                    "primary": True,
-                    "selection": {"action": "choose_payment", "workflow_id": workflow_id},
-                },
-                "reject_cta": {
-                    "label": "Release holds",
-                    "selection": {"action": "release_holds", "workflow_id": workflow_id},
-                },
-            },
-        ),
-        "hero-holds" if int(bundle["total_cents"]) else _line_art(bundle),
-    )
+    return "review", {
+        "title": "Everything is on hold",
+        "summary_rows": rows,
+        "approve_cta": {
+            "label": "Choose payment",
+            "primary": True,
+            "selection": {"action": "choose_payment", "workflow_id": workflow_id},
+        },
+        "reject_cta": {
+            "label": "Release holds",
+            "selection": {"action": "release_holds", "workflow_id": workflow_id},
+        },
+    }
 
 
 def payment_options_card(
@@ -1296,19 +953,9 @@ def payment_options_card(
     children.append(
         _button("Release holds", {"action": "release_holds", "workflow_id": workflow_id})
     )
-    return _with_hero(
-        (
-            "custom",
-            {
-                "root": {
-                    "type": "section",
-                    "title": "Pay ResourcePilot escrow",
-                    "children": children,
-                }
-            },
-        ),
-        "hero-payment",
-    )
+    return "custom", {
+        "root": {"type": "section", "title": "Pay ResourcePilot escrow", "children": children}
+    }
 
 
 def receipt_card(
@@ -1379,24 +1026,14 @@ def receipt_card(
             {"label": "Deposits", "value": "Refundable deposits are paid to sellers at pickup"}
         )
     priced = len({line["seller_id"] for line in bundle["lines"] if not line.get("handoff")})
-    return _with_hero(
-        (
-            "detail",
-            {
-                "title": "Your booking link" if free else f"Booked with {priced} sellers",
-                "summary_rows": rows,
-                "ctas": [
-                    {
-                        "label": "My bookings",
-                        "primary": True,
-                        "selection": {"action": "show_bookings"},
-                    },
-                    {"label": "New request", "selection": {"action": "start_over"}},
-                ],
-            },
-        ),
-        "hero-receipt",
-    )
+    return "detail", {
+        "title": "Your booking link" if free else f"Booked with {priced} sellers",
+        "summary_rows": rows,
+        "ctas": [
+            {"label": "My bookings", "primary": True, "selection": {"action": "show_bookings"}},
+            {"label": "New request", "selection": {"action": "start_over"}},
+        ],
+    }
 
 
 def housing_card(state_data: dict[str, Any]) -> tuple[str, dict[str, Any]]:
@@ -1425,32 +1062,18 @@ def housing_card(state_data: dict[str, Any]) -> tuple[str, dict[str, Any]]:
     title = f"Housing at {school.get('school_name') or 'your school'}"
     if place:
         title += f" · {place}"
-    return _with_hero(
-        (
-            "detail",
+    return "detail", {
+        "title": title,
+        "summary_rows": rows,
+        "ctas": [
             {
-                "title": title,
-                "summary_rows": rows,
-                "ctas": [
-                    {
-                        "label": "Study rooms",
-                        "primary": True,
-                        "selection": {"action": "open_service", "service": "rooms"},
-                    },
-                    {"label": "Start over", "selection": {"action": "start_over"}},
-                ],
+                "label": "Study rooms",
+                "primary": True,
+                "selection": {"action": "open_service", "service": "rooms"},
             },
-        ),
-        "svc-housing",
-    )
-
-
-def _event_image(event: dict[str, Any]) -> list[dict[str, Any]]:
-    """The event's own photo from the school's calendar, else event art. Never fetched by us."""
-    photo = str(event.get("photo") or "")
-    if photo.startswith("https://") and image_base():
-        return [{"type": "image", "src": photo, "alt": str(event["title"]), "aspect_ratio": "16:9"}]
-    return _image("event-default", str(event["title"]))
+            {"label": "Start over", "selection": {"action": "start_over"}},
+        ],
+    }
 
 
 def wellness_card(workflow_id: str, data: dict[str, Any]) -> tuple[str, dict[str, Any]]:
@@ -1462,7 +1085,6 @@ def wellness_card(workflow_id: str, data: dict[str, Any]) -> tuple[str, dict[str
     children: list[dict[str, Any]] = [
         {"type": "badge", "label": "Crisis help · 24/7", "variant": "warning"},
         {"type": "text", "value": CRISIS_TEXT, "style": "body"},
-        *_image("wellness-hero", f"Health & wellness at {name}"),
         {"type": "divider"},
         {"type": "heading", "value": "Wellness rooms open", "level": 3},
     ]
@@ -1479,9 +1101,8 @@ def wellness_card(workflow_id: str, data: dict[str, Any]) -> tuple[str, dict[str
             children.append(
                 {
                     "type": "group",
-                    "direction": "column",
+                    "direction": "row",
                     "children": [
-                        *_image("room-wellness", str(line["name"])),
                         {"type": "text", "value": f"{line['name']} · {detail}", "style": "body"},
                         _button(
                             "View room",
@@ -1521,7 +1142,6 @@ def wellness_card(workflow_id: str, data: dict[str, Any]) -> tuple[str, dict[str
                 "items": [
                     {
                         "children": [
-                            *_event_image(event),
                             {"type": "text", "value": str(event["title"]), "style": "body"},
                             {
                                 "type": "text",
@@ -1584,63 +1204,44 @@ def wellness_card(workflow_id: str, data: dict[str, Any]) -> tuple[str, dict[str
 def recovery_card(
     workflow_id: str, error: str, total_cents: int, refund_due_at: str
 ) -> tuple[str, dict[str, Any]]:
-    return _with_hero(
-        (
-            "review",
+    return "review", {
+        "title": "Booking did not complete",
+        "summary_rows": [
+            {"label": "What happened", "value": error},
+            {"label": "Bookings", "value": "Every seller's booking was cancelled"},
             {
-                "title": "Booking did not complete",
-                "summary_rows": [
-                    {"label": "What happened", "value": error},
-                    {"label": "Bookings", "value": "Every seller's booking was cancelled"},
-                    {
-                        "label": "Your payment",
-                        "value": f"{usd(total_cents)} is safe in escrow. No seller was paid.",
-                    },
-                    {
-                        "label": "Auto refund",
-                        "value": (
-                            f"Refunded automatically at {_zone_time(refund_due_at)} if you wait"
-                        ),
-                    },
-                    {
-                        "label": "Retry",
-                        "value": "Retrying uses the same payment; you never pay twice",
-                    },
-                ],
-                "approve_cta": {
-                    "label": "Retry booking",
-                    "primary": True,
-                    "selection": {"action": "retry_booking", "workflow_id": workflow_id},
-                },
-                "reject_cta": {
-                    "label": "Refund me",
-                    "selection": {"action": "refund", "workflow_id": workflow_id},
-                },
+                "label": "Your payment",
+                "value": f"{usd(total_cents)} is safe in escrow. No seller was paid.",
             },
-        ),
-        "hero-recovery",
-    )
+            {
+                "label": "Auto refund",
+                "value": f"Refunded automatically at {_zone_time(refund_due_at)} if you wait",
+            },
+            {"label": "Retry", "value": "Retrying uses the same payment; you never pay twice"},
+        ],
+        "approve_cta": {
+            "label": "Retry booking",
+            "primary": True,
+            "selection": {"action": "retry_booking", "workflow_id": workflow_id},
+        },
+        "reject_cta": {
+            "label": "Refund me",
+            "selection": {"action": "refund", "workflow_id": workflow_id},
+        },
+    }
 
 
 def refund_card(payment: dict[str, Any], entry: dict[str, Any]) -> tuple[str, dict[str, Any]]:
-    return _with_hero(
-        (
-            "detail",
-            {
-                "title": "Refunded",
-                "summary_rows": [
-                    {"label": "Amount", "value": f"{entry['amount']} {entry['currency']}"},
-                    {"label": "Method", "value": rail_label(str(payment["currency"]))},
-                    {"label": "Status", "value": note_for(entry)},
-                    {"label": "Sellers", "value": "No seller was paid for this request"},
-                ],
-                "ctas": [
-                    {"label": "New request", "primary": True, "selection": {"action": "start_over"}}
-                ],
-            },
-        ),
-        "hero-refund",
-    )
+    return "detail", {
+        "title": "Refunded",
+        "summary_rows": [
+            {"label": "Amount", "value": f"{entry['amount']} {entry['currency']}"},
+            {"label": "Method", "value": rail_label(str(payment["currency"]))},
+            {"label": "Status", "value": note_for(entry)},
+            {"label": "Sellers", "value": "No seller was paid for this request"},
+        ],
+        "ctas": [{"label": "New request", "primary": True, "selection": {"action": "start_over"}}],
+    }
 
 
 VETTING_STAGES = {
@@ -1661,23 +1262,17 @@ def vetting_card(workflow_id: str, rejections: list[dict[str, str]]) -> tuple[st
         }
         for item in rejections[:20]
     ] or [{"label": "Vetting", "value": "Every quote passed vetting"}]
-    return _with_hero(
-        (
-            "detail",
+    return "detail", {
+        "title": "What vetting filtered out",
+        "summary_rows": rows,
+        "ctas": [
             {
-                "title": "What vetting filtered out",
-                "summary_rows": rows,
-                "ctas": [
-                    {
-                        "label": "Back to options",
-                        "primary": True,
-                        "selection": {"action": "show_status", "workflow_id": workflow_id},
-                    }
-                ],
-            },
-        ),
-        "hero-vetting",
-    )
+                "label": "Back to options",
+                "primary": True,
+                "selection": {"action": "show_status", "workflow_id": workflow_id},
+            }
+        ],
+    }
 
 
 def _booking_row(booking: dict[str, Any]) -> dict[str, str]:
@@ -1700,16 +1295,8 @@ def bookings_card(bookings: list[dict[str, Any]]) -> tuple[str, dict[str, Any]]:
         for booking in bookings
         if booking.get("bundle") and booking.get("data", {}).get("brief")
     ] or [{"label": "Bookings", "value": "No bookings yet"}]
-    return _with_hero(
-        (
-            "detail",
-            {
-                "title": "Your recent bookings",
-                "summary_rows": rows,
-                "ctas": [
-                    {"label": "New request", "primary": True, "selection": {"action": "start_over"}}
-                ],
-            },
-        ),
-        "svc-bookings",
-    )
+    return "detail", {
+        "title": "Your recent bookings",
+        "summary_rows": rows,
+        "ctas": [{"label": "New request", "primary": True, "selection": {"action": "start_over"}}],
+    }

@@ -245,7 +245,6 @@ async def handle_chat(ctx: Context, sender: str, message: ChatMessage) -> None:
                 badges=badges,
                 facts=facts,
                 extra_buttons=cards.demo_control_buttons(mode) if demo_controls else None,
-                image=cards.agent_art(IDENTITY.key),
             ),
         ),
     )

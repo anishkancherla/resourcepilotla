@@ -159,7 +159,6 @@ def localist_event(
     keywords: list[str] | None = None,
     filters: dict[str, list[dict[str, Any]]] | None = None,
     all_day: bool = False,
-    photo: str = "",
 ) -> dict[str, Any]:
     return {
         "event": {
@@ -168,7 +167,6 @@ def localist_event(
             "url": "https://tickets.example.com/",
             "localist_url": url or f"https://events.purdue.edu/event/{event_id}",
             "location_name": location,
-            "photo_url": photo,
             "keywords": keywords or [],
             "tags": [],
             "filters": filters or {},
@@ -196,14 +194,7 @@ def localist_events(day: date) -> dict[str, Any]:
             localist_event(
                 3, "Drop-in <b>Meditation</b>", later, 16, location="CAPS, PUSH Building"
             ),
-            localist_event(
-                1,
-                "Free Flu Shot Clinic",
-                day,
-                10,
-                location="PUSH Building",
-                photo="https://localist-images.azureedge.net/photos/1/huge/flu.jpg",
-            ),
+            localist_event(1, "Free Flu Shot Clinic", day, 10, location="PUSH Building"),
             localist_event(2, "Football vs. Iowa", day, 12, location="Ross-Ade Stadium"),
             localist_event(
                 4,
@@ -213,7 +204,6 @@ def localist_events(day: date) -> dict[str, Any]:
                 filters={
                     "event_types": [{"id": 9, "name": "Health & Wellness", "parent_id": None}]
                 },
-                photo="https://tracker.example.com/pixel.jpg",
             ),
             localist_event(5, "Yoga on the Lawn", day, 9, url="https://evil.example.com/yoga"),
             localist_event(6, "Stress Less Week", day - timedelta(days=3), 9),

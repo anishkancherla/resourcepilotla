@@ -10,4 +10,3 @@ postgres-data
 .ruff_cache
 tests
 docs
-assets

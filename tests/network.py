@@ -26,7 +26,6 @@ from uagents import Agent, Model
 from uagents_core.contrib.protocols.chat import ChatAcknowledgement, ChatMessage
 
 from resourcepilot import clock
-from resourcepilot.cards import card_buttons
 from resourcepilot.config import ALL_AGENTS, PLATFORM_ROLES, SELLER_AGENTS
 from resourcepilot.store import DurableStore, MemoryStore
 
@@ -226,20 +225,3 @@ def agent_network(
         network.by_key[key] = module
         network.modules[str(module.agent.address)] = module
     yield network
-
-
-def has_action(card: tuple[str, dict, str], *actions: str) -> bool:
-    """True when a card offers a button for any of these actions, whatever its card kind."""
-    return any(selection.get("action") in actions for _, selection in card_buttons(card[1]))
-
-
-def last_with(network: AgentNetwork, action: str) -> tuple[str, dict, str]:
-    """The latest card that offers ``action``, such as a holds review offering confirm_free."""
-    found = [card for card in network.cards() if has_action(card, action)]
-    assert found, f"no card offers {action}; texts: {network.texts()}"
-    return found[-1]
-
-
-def click(payload: dict, action: str) -> dict:
-    """The selection a person sends by pressing the button for ``action``."""
-    return next(sel for _, sel in card_buttons(payload) if sel.get("action") == action)
