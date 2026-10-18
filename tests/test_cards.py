@@ -509,12 +509,14 @@ def test_known_actions_cover_the_room_and_demo_call_flows_only() -> None:
         "view_housing",
         "show_housing_facts",
         "show_all_housing",
+        "unlock_housing",
         "place_call",
         "call_status",
         "open_orchestrator",
     }
     assert set(cards.PROSE_ACTIONS) <= set(cards.KNOWN_ACTIONS)
-    consequential = {"submit_form", "recheck_room", "submit_link", "place_call"}
+    consequential = {"submit_form", "recheck_room", "submit_link", "place_call", "unlock_housing"}
+    assert consequential <= cards.INPUT_ACTIONS
     assert not consequential & set(cards.PROSE_ACTIONS)
 
 

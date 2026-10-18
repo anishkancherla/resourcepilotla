@@ -83,23 +83,35 @@ def test_eight_real_agents_and_only_live_roles_use_the_network() -> None:
         if "resourcepilot.http import" in path.read_text()
     )
     # agents/run.py hosts the Researcher, Campus Rooms, Verification's link re-checks, and the
-    # Emergency Dispatcher, the only part that calls ElevenLabs.
+    # Emergency Dispatcher, the only part that calls ElevenLabs. payments.py is the Orchestrator's
+    # Stripe test-mode client.
     assert importers == [
         "agents/run.py",
         "resourcepilot/emergency.py",
         "resourcepilot/housing.py",
+        "resourcepilot/payments.py",
         "resourcepilot/rates.py",
         "resourcepilot/research.py",
         "resourcepilot/rooms.py",
     ]
 
 
-def test_no_payment_code_or_demo_shops_remain() -> None:
+def test_payments_exist_only_for_the_orchestrators_hall_match() -> None:
     for relative in REMOVED:
         assert not (ROOT / relative).exists(), relative
     for path in (*ROOT.glob("agents/*.py"), *ROOT.glob("resourcepilot/*.py")):
         text = path.read_text()
-        assert "payment_protocol_spec" not in text, path
+        relative = str(path.relative_to(ROOT))
+        if relative != "agents/run.py":
+            assert "payment_protocol_spec" not in text, path
+        if relative != "resourcepilot/payments.py":
+            assert "cosmpy" not in text, path
+            assert "api.stripe.com" not in text, path
         assert "resource_hold_spec" not in text, path
         assert "import stripe" not in text, path
-        assert "cosmpy" not in text, path
+    assert 'Protocol(spec=payment_protocol_spec, role="seller")' in RUNTIME
+    assert (
+        'if ROLE.key == "orchestrator":\n    agent.include(payment_proto, publish_manifest=True)'
+        in RUNTIME
+    )
+    assert 'PAYMENTS = payments.load_config() if ROLE.key == "orchestrator"' in RUNTIME

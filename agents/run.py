@@ -8,9 +8,13 @@ booking link, Campus Rooms re-checks that room live; a room that was just taken 
 back to the other open rooms. Health and wellness runs the same chain for wellness rooms, plus
 the Researcher's events feed, which Verification re-fetches; a school with no room system skips
 Campus Rooms and the Planner. Housing: Intake, the Campus Researcher, then Verification, which
-re-opens every official link. Emergency (demo): the Emergency Dispatcher checks the form, the
-student reviews the call, and only "Call now" makes it phone the one configured demo contact,
-never 911; the call is never retried. ResourcePilot never reserves a room and takes no payments.
+re-opens every official link and hall page, then the Planner's hall match. When payments are set
+up, the match is the one paid step: the Orchestrator asks for Stripe test-mode or testnet FET
+payment over the Agent Payment Protocol and checks it itself first; the facts stay free.
+Emergency (demo): the Emergency Dispatcher checks the form, the student reviews the call, and
+only "Call now" makes it phone the one configured demo contact, never 911; the call is never
+retried. ResourcePilot never reserves a room and never pays for or
+applies for housing.
 """
 
 from __future__ import annotations
@@ -29,8 +33,15 @@ from uagents_core.contrib.protocols.chat import (
     TextContent,
     chat_protocol_spec,
 )
+from uagents_core.contrib.protocols.payment import (
+    CancelPayment,
+    CommitPayment,
+    CompletePayment,
+    RejectPayment,
+    payment_protocol_spec,
+)
 
-from resourcepilot import cards
+from resourcepilot import cards, payments
 from resourcepilot.clock import parse, utc_now
 from resourcepilot.config import (
     ROLE_BY_KEY,
@@ -81,6 +92,9 @@ agent = Agent(
 
 chat_proto = Protocol(spec=chat_protocol_spec)
 task_proto = Protocol(name="ResourcePilotTasks", version="1.0.0")
+# Only the Orchestrator sells anything: the optional hall match. A live Stripe key stops it here.
+payment_proto = Protocol(spec=payment_protocol_spec, role="seller")
+PAYMENTS = payments.load_config() if ROLE.key == "orchestrator" else payments.PaymentConfig()
 READY = False
 HTTP: Http | None = None
 # Network specialists: they read the public web, so they run outside the synchronous HANDLERS.
@@ -395,6 +409,8 @@ async def _workflow_action(
             await _send_link(ctx, sender, state, "Here is your booking link again.")
         elif state["status"] == "awaiting_call":
             await _show_call_review(ctx, sender, state)
+        elif state["status"] == "awaiting_payment":
+            await _show_match_offer(ctx, sender, state)
         elif state["status"] == "called":
             await _show_call(ctx, sender, state, "Here is your demo call.")
         elif state["status"] == "failed":
@@ -422,6 +438,9 @@ async def _workflow_action(
     if action == "call_status":
         await _check_call(ctx, sender, state)
         return
+    if action == "unlock_housing":
+        await _request_match_payment(ctx, sender, state)
+        return
     housing_done = state.get("service") == "housing" and state["status"] == "answered"
     if action == "view_housing" and housing_done:
         hall = _hall(state, str(selection.get("option_id", "")))
@@ -434,7 +453,8 @@ async def _workflow_action(
                 cards.housing_detail(workflow_id, hall, state["data"]),
             )
             return
-    if action == "show_housing_facts" and housing_done:
+    facts_ready = housing_done or state["status"] == "awaiting_payment"
+    if action == "show_housing_facts" and state.get("service") == "housing" and facts_ready:
         await _show_housing_facts(ctx, sender, state)
         return
     if action == "show_all_housing" and housing_done:
@@ -831,6 +851,256 @@ async def _call_result(ctx: Context, state: dict[str, Any], result: TaskResult) 
 
 
 # ---------------------------------------------------------------------------
+# The paid hall match: one payment request per offer, checked by the Orchestrator itself.
+# ---------------------------------------------------------------------------
+
+
+def _wallet() -> str:
+    """The Orchestrator's own Fetch wallet, derived from its seed: the only FET recipient."""
+    return str(agent.wallet.address())
+
+
+async def _show_match_offer(ctx: Context, sender: str, state: dict[str, Any]) -> None:
+    prices = PAYMENTS.price_labels()
+    if dict(state["data"].get("payment") or {}).get("status") == "requested":
+        await _send_card(
+            ctx,
+            sender,
+            "Your payment request is open. Pay in ASI:One's payment panel, or take the free facts.",
+            cards.housing_payment_card(str(state["workflow_id"]), prices),
+        )
+        return
+    halls = payments.halls_to_match(state["data"])
+    await _send_card(
+        ctx,
+        sender,
+        f"{halls} hall{'s' if halls != 1 else ''} at {_school_name(state)} re-checked. The facts "
+        f"are free; the hall-by-hall match is {' or '.join(prices)}. Test mode only.",
+        cards.housing_unlock_card(str(state["workflow_id"]), state["data"], prices),
+    )
+
+
+async def _request_match_payment(ctx: Context, sender: str, state: dict[str, Any]) -> None:
+    """Claim one payment request per offer; a double click never opens two checkouts."""
+    workflow_id = str(state["workflow_id"])
+    attempt = int(state.get("payment_attempt", 0))
+    if (
+        state.get("service") != "housing"
+        or state["status"] != "awaiting_payment"
+        or not PAYMENTS.enabled
+    ):
+        await _notice(
+            ctx,
+            sender,
+            "Not available",
+            "There is no hall match waiting for payment on this request.",
+            buttons=[_status_button(workflow_id), ("Menu", {"action": "start_over"})],
+        )
+        return
+    if not await store.claim("payment_request", f"{workflow_id}:{attempt}"):
+        await _show_match_offer(ctx, sender, state)
+        return
+    checkout: dict[str, str] | None = None
+    if PAYMENTS.stripe_enabled:
+        try:
+            checkout = await payments.create_checkout(
+                _http(), PAYMENTS, workflow_id=workflow_id, school=_school_name(state)
+            )
+        except ProviderError as exc:
+            if not PAYMENTS.accept_fet:
+                await store.patch_workflow(workflow_id, {"payment_attempt": attempt + 1})
+                await _notice(
+                    ctx,
+                    sender,
+                    "Checkout not started",
+                    f"{exc}. Nothing was charged.",
+                    badge="Try again",
+                    variant="warning",
+                    buttons=[
+                        ("Try again", {"action": "unlock_housing", "workflow_id": workflow_id}),
+                        (
+                            "Free facts only",
+                            {"action": "show_housing_facts", "workflow_id": workflow_id},
+                        ),
+                    ],
+                )
+                return
+    request = payments.payment_request(
+        PAYMENTS,
+        workflow_id=workflow_id,
+        wallet=_wallet(),
+        school=_school_name(state),
+        checkout=checkout,
+    )
+    data = {
+        **state["data"],
+        "payment": {
+            "status": "requested",
+            "attempt": attempt,
+            "checkout_session_id": checkout["checkout_session_id"] if checkout else "",
+            "methods": [funds.payment_method for funds in request.accepted_funds],
+            "requested_at": _now(),
+        },
+    }
+    state = await store.patch_workflow(workflow_id, {"data": data})
+    await _audit(ctx, state, "payment_requested", methods=data["payment"]["methods"])
+    await ctx.send(sender, request)
+    await _send_card(
+        ctx,
+        sender,
+        "Payment requested. Pay in ASI:One's payment panel; ResourcePilot checks the payment "
+        "itself before the Planner starts.",
+        cards.housing_payment_card(workflow_id, PAYMENTS.price_labels()),
+    )
+
+
+async def _payment_workflow(ctx: Context, sender: str, reference: str | None) -> dict | None:
+    """The sender's workflow that is waiting for this payment, by reference or by session."""
+    state = (
+        await store.get_workflow(reference)
+        if reference
+        else await store.find_workflow(sender, _session(ctx))
+    )
+    if (
+        state is None
+        or state.get("requester") != sender
+        or state.get("service") != "housing"
+        or state.get("status") != "awaiting_payment"
+        or dict(state["data"].get("payment") or {}).get("status") != "requested"
+    ):
+        return None
+    return state
+
+
+async def _check_commit(state: dict[str, Any], message: CommitPayment) -> str | None:
+    """Check the payment with Stripe or the testnet itself. Returns the problem, or None."""
+    method = message.funds.payment_method
+    pending = dict(state["data"]["payment"])
+    if method not in pending.get("methods", []):
+        return "That payment method was not offered for this request"
+    if method == "stripe":
+        if message.transaction_id != pending.get("checkout_session_id"):
+            return "That checkout was not created for this request"
+        return await payments.verify_stripe(
+            _http(),
+            PAYMENTS,
+            session_id=message.transaction_id,
+            workflow_id=str(state["workflow_id"]),
+        )
+    if message.funds.currency.upper() != "FET":
+        return "Only testnet FET is accepted"
+    return await payments.verify_fet(
+        PAYMENTS,
+        tx_hash=message.transaction_id,
+        buyer=payments.buyer_wallet(message.metadata),
+        wallet=_wallet(),
+    )
+
+
+async def _decline_payment(
+    ctx: Context, sender: str, state: dict[str, Any], transaction_id: str, reason: str
+) -> None:
+    """Cancel this commit and offer a fresh payment request; nothing unlocks."""
+    workflow_id = str(state["workflow_id"])
+    data = {**state["data"], "payment": {"status": "declined", "reason": reason}}
+    attempt = int(state.get("payment_attempt", 0)) + 1
+    state = await store.patch_workflow(workflow_id, {"data": data, "payment_attempt": attempt})
+    await _audit(ctx, state, "payment_declined", reason=reason)
+    await ctx.send(sender, CancelPayment(transaction_id=transaction_id, reason=reason))
+    await _notice(
+        ctx,
+        sender,
+        "Payment not confirmed",
+        f"{reason}. The hall match is still locked, and the facts are free.",
+        badge="Not confirmed",
+        variant="warning",
+        buttons=[
+            ("Try again", {"action": "unlock_housing", "workflow_id": workflow_id}),
+            ("Free facts only", {"action": "show_housing_facts", "workflow_id": workflow_id}),
+        ],
+    )
+
+
+@payment_proto.on_message(model=CommitPayment)
+async def handle_commit_payment(ctx: Context, sender: str, message: CommitPayment) -> None:
+    if ROLE.key != "orchestrator":
+        return
+    transaction_id = str(message.transaction_id or "")[:300]
+    state = await _payment_workflow(ctx, sender, message.reference)
+    if state is None:
+        await ctx.send(
+            sender,
+            CancelPayment(
+                transaction_id=transaction_id,
+                reason="No hall match is waiting for this payment",
+            ),
+        )
+        return
+    try:
+        problem = await _check_commit(state, message)
+    except ProviderError as exc:
+        problem = f"{exc}; ResourcePilot could not confirm the payment"
+    if problem is None and not await store.claim(
+        "payment_tx", f"{message.funds.payment_method}:{transaction_id.lower()}"
+    ):
+        problem = "That payment was already used"
+    if problem is not None:
+        await _decline_payment(ctx, sender, state, transaction_id, problem)
+        return
+    workflow_id = str(state["workflow_id"])
+    if not await store.claim("payment_unlock", workflow_id):
+        return
+    await ctx.send(sender, CompletePayment(transaction_id=transaction_id))
+    method = message.funds.payment_method
+    receipt = {
+        "status": "paid",
+        "method": method,
+        "amount": f"{PAYMENTS.price_fet} testnet FET"
+        if method == "fet_direct"
+        else f"${PAYMENTS.price_cents / 100:.2f} (Stripe test mode)",
+        "transaction": transaction_id[:12],
+        "paid_at": _now(),
+    }
+    data = {**state["data"], "payment": receipt}
+    task, state = await advance_to(
+        store,
+        workflow_id=workflow_id,
+        requester=sender,
+        session_id=str(state["session_id"]),
+        next_role="planner",
+        payload=data,
+    )
+    await _audit(ctx, state, "payment_completed", method=method)
+    await _dispatch(ctx, task)
+    await _send_card(
+        ctx,
+        sender,
+        "Payment confirmed. The Planner is matching your halls now.",
+        cards.progress_card(workflow_id, "planner", _chain(state)),
+    )
+
+
+@payment_proto.on_message(model=RejectPayment)
+async def handle_reject_payment(ctx: Context, sender: str, message: RejectPayment) -> None:
+    if ROLE.key != "orchestrator":
+        return
+    state = await _payment_workflow(ctx, sender, None)
+    if state is None:
+        return
+    workflow_id = str(state["workflow_id"])
+    data = {**state["data"], "payment": {"status": "declined", "reason": "Declined"}}
+    attempt = int(state.get("payment_attempt", 0)) + 1
+    state = await store.patch_workflow(workflow_id, {"data": data, "payment_attempt": attempt})
+    await _audit(ctx, state, "payment_rejected")
+    await _send_card(
+        ctx,
+        sender,
+        "No payment was taken. Here are the free housing facts and official links.",
+        cards.housing_card(state["data"]),
+    )
+
+
+# ---------------------------------------------------------------------------
 # Specialists
 # ---------------------------------------------------------------------------
 
@@ -924,7 +1194,7 @@ async def handle_task_result(ctx: Context, sender: str, result: TaskResult) -> N
             await _call_result(ctx, side_state, result)
         return
     try:
-        next_task, state = await accept_result(store, result)
+        next_task, state = await accept_result(store, result, paid_match=PAYMENTS.enabled)
     except (KeyError, ValueError) as exc:
         ctx.logger.warning("Ignoring uncorrelated result: %s", exc)
         return
@@ -960,6 +1230,8 @@ async def handle_task_result(ctx: Context, sender: str, result: TaskResult) -> N
         await _show_rooms(ctx, result.requester, state)
     elif state["status"] == "awaiting_call":
         await _show_call_review(ctx, result.requester, state)
+    elif state["status"] == "awaiting_payment":
+        await _show_match_offer(ctx, result.requester, state)
     elif state["status"] == "failed":
         error = str(state.get("error", "Something went wrong"))
         if error.startswith("Missing"):
@@ -1075,6 +1347,8 @@ async def handle_ack(ctx: Context, sender: str, message: ChatAcknowledgement) ->
 
 agent.include(chat_proto, publish_manifest=True)
 agent.include(task_proto, publish_manifest=True)
+if ROLE.key == "orchestrator":
+    agent.include(payment_proto, publish_manifest=True)
 
 
 if __name__ == "__main__":

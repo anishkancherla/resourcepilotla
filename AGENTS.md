@@ -36,6 +36,10 @@ official pages in [docs/official-links.md](docs/official-links.md) for anything 
     the housing facts card when no hall could be read). The Researcher reads each hall from the
     school's own pages; Verification re-opens every hall page; the Planner matches halls to the
     student's criteria. Halls a page rules out are hidden; unknowns are shown after matches.
+    When payments are configured and Verification kept a hall, the workflow pauses after
+    Verification (`awaiting_payment`) with the hall-match offer; **Unlock my hall match**
+    (`unlock_housing`) sends one `RequestPayment`, and only a verified `CommitPayment` sends the
+    Planner its task. The facts card stays free throughout.
   - `emergency`: Emergency Dispatcher (`phase="preview"`) → review card (`awaiting_call`).
     **Call now** sends the Dispatcher a `phase="call"` task, then the call card (`called`).
     **Check the call** sends a `phase="status"` task and shows the transcript.
@@ -126,13 +130,36 @@ official pages in [docs/official-links.md](docs/official-links.md) for anything 
 - Never claim a live call was tested or demonstrated without real evidence. The tests mock
   ElevenLabs.
 
-## No payments in this build
+## Payments: the hall match only, test mode only
 
-- ResourcePilot takes no payments. Do not add payment rails, Stripe (real or mock), FET, or
-  escrow without a real, tested implementation and an explicit request from the user.
-- Never add a mainnet or real-value payment switch.
-- Never claim payments, a Stripe integration, Skyfire, UCP, MCP, A2A, AEVs, or Almanac
-  registration without a real, tested implementation and demo evidence.
+The user asked for Stripe and FET payments in the housing service. They exist only for the
+optional hall-by-hall housing match, in `resourcepilot/payments.py` and the Orchestrator.
+
+- Only the Orchestrator takes payments, as the `seller` in `AgentPaymentProtocol`
+  (`uagents_core.contrib.protocols.payment`). It is the only agent that includes that protocol
+  and the only one that talks to `api.stripe.com` or reads the Fetch testnet.
+- The payment buys ResourcePilot's match, never housing. Every payment card says so. Never pay
+  a school, a hall, or anyone else, and never take a deposit, fee, or rent.
+- Facts and official links stay free. The offer appears only when Verification kept at least one
+  hall; a school with no readable halls is never charged.
+- Test mode only. A `STRIPE_SECRET_KEY` or `STRIPE_PUBLISHABLE_KEY` that is not a test key stops
+  the Orchestrator from starting. FET is fixed to the Fetch stable testnet (`atestfet`). Never
+  add a mainnet or real-value payment switch.
+- Never trust the buyer's word. For Stripe, the Checkout Session must be the one created for this
+  workflow, paid, in test mode, in USD, for exactly the configured price. For FET, read the
+  transaction from the testnet: it must have succeeded and send at least the configured price
+  from the buyer's wallet to the Orchestrator's own wallet. Never use the amount in the commit.
+- One payment request per offer (claimed per attempt), one unlock per workflow, and each
+  transaction ID used once ever. Only the **Unlock my hall match** selection with its stable
+  workflow ID asks for payment, never prose. Send `CompletePayment` only after the checks pass,
+  and `CancelPayment` with a short reason otherwise.
+- Never log, show, store, or put in an error the Stripe secret key, a checkout's client secret,
+  or a raw response body.
+- Never claim a live payment was tested or demonstrated without real evidence. The tests mock
+  Stripe and the testnet.
+- Do not add other rails (Skyfire, escrow, real money) without a real, tested implementation and
+  an explicit request from the user. Never claim Skyfire, UCP, MCP, A2A, AEVs, or Almanac
+  contract registration without a real, tested implementation and demo evidence.
 
 ## Keep docs and tests synchronized
 

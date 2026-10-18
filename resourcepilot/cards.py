@@ -5,8 +5,9 @@ school, health and wellness (quiet rooms, the week's wellness events, and the 98
 campus housing facts with official links, and an emergency demo drill that phones one teammate,
 never 911. Every reply is a card: the menu, a short form,
 progress, a carousel of open rooms, the wellness card, a room detail, the booking-link receipt,
-the housing card, and recent bookings. ResourcePilot never reserves a room or applies for
-housing, so no card asks for payment.
+the housing card, and recent bookings. ResourcePilot never reserves a room, applies for housing,
+or pays for housing. The one paid step is optional: the hall-by-hall housing match, offered on its
+own card after the free facts are ready, paid in Stripe test mode or testnet FET.
 
 Every payload uses only the fields documented on the Innovation Lab interactive-cards page.
 ASI:One silently falls back to plain text when a payload has an unexpected shape, so
@@ -86,6 +87,7 @@ STAGE_ART = {
     "emergency": "role-emergency",
     "call": "role-emergency",
     "call_status": "role-emergency",
+    "payment": "svc-housing",
 }
 # An event's own photo URL is shown only when it is this short; the student's browser loads it.
 MAX_PHOTO_URL = 400
@@ -136,15 +138,18 @@ KNOWN_ACTIONS = (
     "view_housing",
     "show_housing_facts",
     "show_all_housing",
+    "unlock_housing",
     "place_call",
     "call_status",
     "open_orchestrator",
 )
 # A card offering any of these waits for the student, so it can never be marked terminal.
-INPUT_ACTIONS = frozenset({"submit_form", "submit_link", "recheck_room", "place_call"})
+INPUT_ACTIONS = frozenset(
+    {"submit_form", "submit_link", "recheck_room", "place_call", "unlock_housing"}
+)
 # Bounded allowlist for planner-mediated prose: it only opens menus and views. Submitting a form,
-# re-checking a room, submitting a link, or placing a demo call needs the stable IDs that only a
-# card selection carries.
+# re-checking a room, submitting a link, placing a demo call, or asking to pay needs the stable IDs
+# that only a card selection carries.
 PROSE_ACTIONS = ("open_orchestrator", "show_status", "show_results", "show_bookings", "start_over")
 # Prose that only opens a service's form, never submits one.
 SERVICE_WORDS = (
@@ -912,6 +917,7 @@ STAGE_LABELS = {
     "emergency": "Preparing the demo call",
     "call": "Placing the demo call",
     "call_status": "Checking the call",
+    "payment": "Waiting for payment",
 }
 
 
@@ -1380,6 +1386,64 @@ def housing_detail(
         payload = {"title": payload["title"], "hero_image": str(hall["photo"]), **payload}
         return "detail", payload
     return _with_hero(("detail", payload), "hall-default", str(hall["name"]))
+
+
+# Said on every payment card: what the money buys, and that none of it is real.
+MATCH_NOT_HOUSING = (
+    "This pays ResourcePilot for the match, never your school. ResourcePilot never applies for, "
+    "reserves, or pays for housing."
+)
+TEST_MONEY = "Test mode: Stripe test cards and testnet FET only. No real money moves."
+
+
+def housing_unlock_card(
+    workflow_id: str, data: dict[str, Any], prices: list[str]
+) -> tuple[str, dict[str, Any]]:
+    """The free facts are ready; the hall-by-hall match is the one optional paid step."""
+    school = str(data.get("school", {}).get("school_name") or "your school")
+    halls = len(dict(data.get("housing") or {}).get("options") or [])
+    plural = "s" if halls != 1 else ""
+    children: list[dict[str, Any]] = [
+        {"type": "badge", "label": f"{halls} hall{plural} re-checked", "variant": "success"},
+        {
+            "type": "text",
+            "value": f"ResourcePilot read {halls} hall{plural} from {school}'s own pages, and "
+            "Verification re-opened each one. Unlock the Planner's hall-by-hall match to your "
+            "criteria, with each hall's photo, features, and listed price.",
+            "style": "body",
+        },
+        *_rows([{"label": "Price", "value": " or ".join(prices)}]),
+        {"type": "text", "value": MATCH_NOT_HOUSING, "style": "muted"},
+        {"type": "text", "value": TEST_MONEY, "style": "muted"},
+        _buttons(
+            [
+                ("Unlock my hall match", {"action": "unlock_housing", "workflow_id": workflow_id}),
+                ("Free facts only", {"action": "show_housing_facts", "workflow_id": workflow_id}),
+            ]
+        ),
+    ]
+    card = (
+        "custom",
+        {"root": {"type": "section", "title": f"Your halls at {school}", "children": children}},
+    )
+    return _with_hero(card, "svc-housing", f"Residence halls at {school}")
+
+
+def housing_payment_card(workflow_id: str, prices: list[str]) -> tuple[str, dict[str, Any]]:
+    """Sent with the payment request: the student pays in ASI:One's own payment panel."""
+    return notice_card(
+        "Finish the payment",
+        "Pay in the payment panel ASI:One shows with this message ("
+        + " or ".join(prices)
+        + "). Once ResourcePilot confirms it, the Planner matches your halls. "
+        + TEST_MONEY,
+        badge="Payment requested",
+        buttons=[
+            ("Check payment", {"action": "show_status", "workflow_id": workflow_id}),
+            ("Free facts only", {"action": "show_housing_facts", "workflow_id": workflow_id}),
+        ],
+        image="hero-receipt",
+    )
 
 
 def no_housing_match_card(workflow_id: str, data: dict[str, Any]) -> tuple[str, dict[str, Any]]:

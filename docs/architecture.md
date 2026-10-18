@@ -21,8 +21,10 @@ messages. All eight run from `agents/run.py`, one process per agent, selected by
 | --- | --- | --- |
 | Agent Chat Protocol | Every agent | `ChatMessage`, `ChatAcknowledgement` |
 | `ResourcePilotTasks` 1.0.0 | Every agent | `TaskRequest`, `TaskResult`, `AuditEvent` |
+| `AgentPaymentProtocol` 0.1.0 | The Orchestrator, as `seller` | `RequestPayment`, `CommitPayment`, `RejectPayment`, `CompletePayment`, `CancelPayment` |
 
-Every agent publishes both manifests. A specialist's profile chat answers with a status card that
+Every agent publishes the Chat and Tasks manifests, and the Orchestrator also publishes the
+payment manifest. A specialist's profile chat answers with a status card that
 names its role and points to the Orchestrator; only the Orchestrator starts workflows.
 
 ## Services and their chains
@@ -195,6 +197,24 @@ Emergency, crisis, and short numbers are refused, and the voice always opens wit
 ResourcePilot demo drill, not a real emergency". Every emergency card says it is a demo drill that
 does not contact 911 or campus police, and "In a real emergency, call 911." A call starts only from
 the **Call now** selection, never from prose. The rules are in [trust-model.md](trust-model.md).
+
+## The paid hall match
+
+With payments configured (Stripe test keys, `ACCEPT_TESTNET_FET=true`, or both), a housing
+search pauses after Verification when it kept any hall:
+
+```text
+Verification ─▶ awaiting_payment ─▶ hall-match offer card (facts stay free)
+  "Unlock my hall match" ─▶ Orchestrator creates a Stripe test Checkout Session
+     ─▶ RequestPayment (Stripe and/or testnet FET, recipient = Orchestrator's wallet)
+  ASI:One ─▶ CommitPayment ─▶ Orchestrator reads Stripe or the testnet itself
+     paid    ─▶ CompletePayment ─▶ Planner ─▶ halls carousel
+     not yet ─▶ CancelPayment ─▶ "Payment not confirmed" card with Try again
+  ASI:One ─▶ RejectPayment ─▶ the free facts card
+```
+
+Each offer is claimed once per attempt, each workflow unlocks once, and each transaction ID is
+used once. Without payment settings, housing runs straight through to the Planner as before.
 
 ## The task pipeline
 

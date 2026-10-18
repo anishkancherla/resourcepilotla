@@ -34,6 +34,16 @@ Capture real evidence for each item. Do not claim an item until you have it.
 - [ ] A demo call starts only from **Call now**, and a double press places one call. Show this
       in the tests, which mock ElevenLabs.
 
+## Payments (bonus)
+
+- [ ] The Orchestrator's profile shows the `AgentPaymentProtocol` manifest.
+- [ ] A housing search shows the hall-match offer, and **Unlock my hall match** opens a payment
+      panel in ASI:One. Record it; the tests mock Stripe and the testnet.
+- [ ] A Stripe test-card payment unlocks the halls carousel. Optional: a testnet FET payment.
+- [ ] A declined or unpaid checkout is cancelled with a card, and the free facts stay available.
+- [ ] Be honest: Stripe test mode and testnet FET only, no real money, and the payment buys
+      ResourcePilot's match, never housing.
+
 ## Reliability and error recovery
 
 - [ ] A room taken during the re-check reroutes to the other open rooms, live or in
@@ -54,8 +64,8 @@ Capture real evidence for each item. Do not claim an item until you have it.
 - [ ] Housing facts come from IPEDS, and the office and portal links come from the school's own
       site and are re-opened by Verification.
 - [ ] Be honest: IPEDS facts are the 2022 survey year, the LibCal availability endpoint is not a
-      documented API, and ResourcePilot takes no payments, does not reserve rooms, and does not
-      apply for housing.
+      documented API, payments are Stripe test mode and testnet FET only, and ResourcePilot
+      does not reserve rooms and does not apply for or pay for housing.
 - [ ] Be honest about the emergency demo: it never calls 911 or any emergency service, it phones
       one teammate's demo number, and the tests mock ElevenLabs. Claim a live call only if you
       recorded one with your own ElevenLabs and phone-provider setup.

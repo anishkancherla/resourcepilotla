@@ -3,8 +3,9 @@
 Why can the Orchestrator send a student to a room-booking link or a housing portal it did not
 build? Because every link it shows was found on the school's own site, checked by a separate
 agent before the student sees it, and, for a room, read again live right before it is handed
-over. ResourcePilot takes no payments, so there is no money to protect: what it protects is the
-student's trust in the link and the privacy of their email address. The emergency demo call adds
+over. Its only payment is the optional hall match, in test mode only (section 8): what it
+protects is the student's trust in the link, the privacy of their email address, and that a
+match is unlocked only by a payment it checked itself. The emergency demo call adds
 one more rule: it must never reach a real emergency line (section 6).
 
 ## 1. Where rooms and links come from
@@ -152,6 +153,31 @@ teammate playing the dispatcher, over the user's own Twilio number or SIP trunk.
 - Memory and Audit accepts audit events only from ResourcePilot's own agents.
 - Card selections carry stable workflow and option IDs. A re-check or a demo call is never
   started from ambiguous prose.
+
+## 8. The paid hall match
+
+Housing facts and official links are free. When payments are set up and Verification kept at
+least one hall, the Orchestrator offers the Planner's hall-by-hall match as the one paid step.
+
+- **What it buys.** ResourcePilot's match, never housing. Every payment card says the payment
+  never goes to the school, and ResourcePilot still never applies for, reserves, or pays for
+  housing. A school with no readable halls gets the free facts and is never asked to pay.
+- **Test mode only.** The Orchestrator refuses to start with a Stripe key that is not a test key,
+  and FET is fixed to the Fetch stable testnet. There is no switch to real money.
+- **One seller.** Only the Orchestrator includes the Agent Payment Protocol, as its `seller`, and
+  only it talks to Stripe or reads the testnet. **Unlock my hall match** sends one
+  `RequestPayment` per offer; a double click never opens a second checkout, and prose never asks
+  for payment.
+- **Checked, not trusted.** A `CommitPayment` must come from the student who started the
+  workflow, for the workflow that is waiting. For Stripe, the Orchestrator reads the Checkout
+  Session itself: it must be the one it created for this workflow, paid, in test mode, in USD, for
+  exactly the configured price. For FET, it reads the transaction from the testnet: it must have
+  succeeded and sent at least the configured price, in `atestfet`, from the buyer's wallet to the
+  Orchestrator's own wallet. The amount the buyer claims is never used.
+- **Used once.** Each transaction ID unlocks one workflow, ever, and each workflow unlocks once.
+  A failed check sends `CancelPayment` with a short reason and offers a fresh request.
+- **No secrets.** The Stripe secret key, a checkout's client secret, and raw response bodies are
+  never logged, stored, or shown.
 
 ## Limits of this demo
 

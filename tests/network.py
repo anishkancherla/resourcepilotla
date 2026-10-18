@@ -28,6 +28,7 @@ from uagents_core.contrib.protocols.chat import ChatAcknowledgement, ChatMessage
 from resourcepilot import clock
 from resourcepilot.cards import card_buttons
 from resourcepilot.config import ALL_AGENTS, PLATFORM_ROLES
+from resourcepilot.payments import PaymentConfig
 from resourcepilot.store import DurableStore, MemoryStore
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -40,6 +41,8 @@ HANDLER_NAMES = {
     "TaskRequest": "handle_task",
     "TaskResult": "handle_task_result",
     "AuditEvent": "handle_audit",
+    "CommitPayment": "handle_commit_payment",
+    "RejectPayment": "handle_reject_payment",
 }
 
 
@@ -202,6 +205,8 @@ def agent_network(
         monkeypatch.setattr(module, "utc_now", shifted_now)
         if hasattr(module, "HTTP"):
             monkeypatch.setattr(module, "HTTP", fake_http(network.store))
+        # Payments are off unless a test turns them on, whatever a local .env says.
+        monkeypatch.setattr(module, "PAYMENTS", PaymentConfig())
         network.by_key[key] = module
         network.modules[str(module.agent.address)] = module
     yield network

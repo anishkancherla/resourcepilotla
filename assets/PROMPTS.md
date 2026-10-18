@@ -37,7 +37,7 @@ cards show no images and stay valid.
 | `hero-info` | A friendly information badge, calm blue light |
 | `hero-warning` | A warning triangle with a shield and an info badge, orange light |
 | `hero-link` | Chain links and a magnifying glass searching for a booking link |
-| `hero-receipt` | A paper handoff record with a green check mark (a booking link handed over, never a payment) |
+| `hero-receipt` | A paper handoff record with a green check mark (a booking link handed over, or a test-mode payment request) |
 | `hero-call` | A calm demo-drill phone call: a ringing smartphone with a gold practice badge, transcript speech bubbles, and an info badge, soft blue light; no police, sirens, or ambulances |
 | `role-orchestrator` | A friendly round white robot agent, the conductor that runs the whole chat, holding a campus |
 | `role-intake` | A friendly round white robot agent reading a form and a calendar |

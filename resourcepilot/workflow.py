@@ -18,6 +18,7 @@ from resourcepilot.clock import later, parse, utc_now
 from resourcepilot.config import env_int, service_chain
 from resourcepilot.intake import intake_handler
 from resourcepilot.models import TaskRequest, TaskResult
+from resourcepilot.payments import halls_to_match
 from resourcepilot.planning import planner_handler
 from resourcepilot.store import DurableStore
 from resourcepilot.vetting import verification_handler
@@ -116,9 +117,13 @@ async def begin_workflow(
 
 
 async def accept_result(
-    store: DurableStore, result: TaskResult
+    store: DurableStore, result: TaskResult, *, paid_match: bool = False
 ) -> tuple[TaskRequest | None, dict[str, Any]]:
-    """Advance the planning pipeline by one correlated, first-seen specialist result."""
+    """Advance the planning pipeline by one correlated, first-seen specialist result.
+
+    With ``paid_match``, a housing search pauses after Verification when it kept any hall: the
+    Planner's hall match waits for the student to pay, and the free facts stay available.
+    """
     if not await store.claim("task_result", result.request_id):
         state = await store.get_workflow(result.workflow_id)
         if state is None:
@@ -140,6 +145,16 @@ async def accept_result(
         return None, await store.patch_workflow(
             result.workflow_id,
             {"status": "awaiting_link", "stage": "link", "data": result.payload},
+        )
+    if (
+        paid_match
+        and service == "housing"
+        and result.source_role == "verification"
+        and halls_to_match(result.payload)
+    ):
+        return None, await store.patch_workflow(
+            result.workflow_id,
+            {"status": "awaiting_payment", "stage": "payment", "data": result.payload},
         )
     chain = service_chain(service, result.payload)
     index = chain.index(result.source_role)

@@ -71,7 +71,11 @@ The crisis line is static, so it shows even when a school has nothing to find."
 ## 5. Campus housing (25 s)
 
 Press **Menu**, then **Open campus housing**. Enter a Purdue, Georgia Tech, or UC Riverside email,
-pick **Incoming first-year**, tick **Air conditioning**, and press **Find housing**. The carousel
+pick **Incoming first-year**, tick **Air conditioning**, and press **Find housing**. If payments are
+set up, the hall-match offer appears first: press **Unlock my hall match** and pay in ASI:One's
+payment panel with Stripe's test card `4242 4242 4242 4242` (any future date and CVC) or testnet
+FET. Say: "The facts are free. The match is the one paid step, in test mode, and the Orchestrator
+checks the payment with Stripe itself before the Planner starts." The carousel then
 shows each hall the school lists, matches first, with photos where the school has them. Open one:
 style, who it's for, rooms, features, price, and how it fits each criterion, with the apply link.
 Say: "Every detail comes from the hall's own page, re-opened by Verification. If the page doesn't
@@ -102,5 +106,6 @@ with its own address and job."
 
 ## 9. Close (5 s)
 
-Say: "Free study rooms at any school, re-checked live, and housing facts with official links. No
-payments, no reservations, and you always book with your own sign-in."
+Say: "Free study rooms at any school, re-checked live, and housing facts with official links. The
+only payment is the optional hall match, in test mode, and it never pays your school. No
+reservations, and you always book with your own sign-in."

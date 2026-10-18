@@ -14,7 +14,10 @@ school. Everything runs on buttons and short forms, and every reply is a card.
   starts with 988 and 911. ResourcePilot never asks about your health or books appointments.
 - **Campus housing.** Say who you are, the style you want, your must-haves, and a budget. You get
   every on-campus hall your school lists, matched to them, each with its photo, style, features,
-  and listed price, plus IPEDS facts and the apply link. You apply on the school's site.
+  and listed price, plus IPEDS facts and the apply link. You apply on the school's site. The
+  facts are free; when payments are set up, the hall-by-hall match is unlocked with a Stripe
+  test-mode card or testnet FET, and the Orchestrator checks the payment itself before the
+  Planner starts.
 - **Emergency (demo).** A demo drill, never a real emergency call. Say what is happening, where,
   and how many people need help, then review the call. **Call now** has the Emergency Dispatcher
   phone your team's demo contact, never 911, and **Check the call** shows the summary and
@@ -28,7 +31,8 @@ asked, for the request it is waiting on, and it retries a silent step once. The 
 exception: it is never retried. If a room is taken when it is re-checked, the Planner shows you
 the other open rooms.
 
-It never takes payment, never reserves a room, never applies for housing, and never calls 911.
+Its only payment is that optional hall match, in test mode only. It never reserves a room, never
+applies for or pays for housing, and never calls 911.
 Free text gets the services menu; it never starts a request or a call from prose.
 
-Protocols: Agent Chat Protocol, ResourcePilotTasks.
+Protocols: Agent Chat Protocol, ResourcePilotTasks, Agent Payment Protocol (seller).

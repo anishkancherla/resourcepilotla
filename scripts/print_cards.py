@@ -112,6 +112,9 @@ def samples() -> None:
     show("Sample room detail", cards.room_detail("demo", SAMPLE_OPTIONS[0]))
     show("Sample booking link", cards.room_link_receipt(SAMPLE_OPTIONS[0]), terminal=True)
     show("Sample housing", cards.housing_card(SAMPLE_HOUSING))
+    prices = ["$1.00 by card (Stripe test mode)", "1 FET on the Fetch testnet"]
+    show("Hall match offer", cards.housing_unlock_card("demo", SAMPLE_HOUSING, prices))
+    show("Hall match payment", cards.housing_payment_card("demo", prices))
     show("No bookings yet", cards.bookings_card([]))
     show("Demo call review", cards.emergency_review_card("demo", SAMPLE_PREVIEW))
     show("Demo call placed", cards.emergency_call_card("demo", SAMPLE_CALL))
