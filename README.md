@@ -198,7 +198,10 @@ FET, and no escrow. It does not reserve study or wellness rooms, RSVP to events,
 reserve, or pay for housing. It links you to your school's own site, where you sign in yourself.
 Hall details come from each school's own pages and only as far as those pages say: schools whose
 halls are not linked from the housing site, or are on a separate site, fall back to the housing
-facts and links, and prices appear only when a hall's page lists one.
+facts and links. A hall's price comes from its own page, the school's rates table, or the hall's
+rate PDF; when none of those publishes one (for example, rates behind a sign-in), the card shows
+the school's typical cost from IPEDS, labeled as a school-wide figure, plus the official rates
+link.
 It never asks about your health, books health or counseling appointments, or gives health advice.
 The 988 line on the wellness card is static text, not a referral service.
 

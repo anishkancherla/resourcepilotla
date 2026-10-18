@@ -62,6 +62,14 @@ footers are removed first, so site-wide words cannot tag every hall. Verificatio
 hall page itself. The Planner rules a hall out only on its own page's words; anything a page does
 not say is shown as "not listed", never guessed.
 
+Prices from a rates page or a rate PDF are read the same cautious way. A PDF is an untrusted
+document: it is fetched only over https on the school's domain under the same address and
+redirect checks, capped at 3MB, must start with `%PDF-`, and is parsed for two pages at most in
+a worker thread with a five-second limit. Only dollar amounts on its yearly row are used, and
+only the room columns its header names; anything unclear yields no number, just the official
+link. The IPEDS fallback is always labeled as the school's typical cost, never as a hall's
+rate.
+
 ## 5. Reading the public web safely
 
 The Campus Researcher, Verification's housing link and events feed re-checks, Campus Rooms, and

@@ -96,6 +96,8 @@ def housing_checks(brief: dict[str, Any], hall: dict[str, Any]) -> dict[str, str
         checks[str(need)] = "match" if need in features else "unknown"
     budget = int(brief.get("max_budget_cents") or 0)
     if budget:
+        # The hall's lowest published yearly price: a hall fits if some room in it does. A price
+        # with no stated period, or none at all, is unknown, never a guess.
         price = int(hall.get("yearly_cents") or 0)
         checks["budget"] = "unknown" if not price else "match" if price <= budget else "out"
     return checks

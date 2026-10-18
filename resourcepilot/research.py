@@ -23,6 +23,7 @@ are shown as data and never acted on.
 
 from __future__ import annotations
 
+import asyncio
 import html as html_lib
 import json
 import re
@@ -40,6 +41,9 @@ IPEDS_BASE = "https://educationdata.urban.org/api/v1/college-university/ipeds"
 IPEDS_DIRECTORY = f"{IPEDS_BASE}/directory/{IPEDS_YEAR}/"
 IPEDS_CHARACTERISTICS = f"{IPEDS_BASE}/institutional-characteristics/{IPEDS_YEAR}/"
 IPEDS_SOURCE = f"IPEDS {IPEDS_YEAR} via Urban Institute Education Data API"
+# Housing costs come from the newest survey year a school reported, then the one before.
+IPEDS_COST_YEARS = (2023, 2022)
+IPEDS_COST_TIMEOUT = 15.0
 DIRECTORY_CACHE_KEY = f"research:ipeds-directory:{IPEDS_YEAR}:v1"
 DIRECTORY_MAX_BYTES = 32 * 1024 * 1024
 WEEK = 7 * 24 * 3600
@@ -223,7 +227,13 @@ class Budget:
 
 
 async def safe_page(
-    http: Http, url: str, domain: str, budget: Budget, extra: tuple[str, ...] = ()
+    http: Http,
+    url: str,
+    domain: str,
+    budget: Budget,
+    extra: tuple[str, ...] = (),
+    *,
+    max_bytes: int = 1_500_000,
 ) -> Page | None:
     """Fetch one https page on an allowed host, vetting every redirect hop. None on failure."""
     current = url
@@ -233,7 +243,7 @@ async def safe_page(
         if not await http.public_host(str(urlsplit(current).hostname)):
             return None
         try:
-            page = await http.page(current, provider="School website")
+            page = await http.page(current, provider="School website", max_bytes=max_bytes)
         except ProviderError:
             return None
         if page.location and 300 <= page.status < 400:
@@ -452,6 +462,9 @@ def housing_facts(row: dict[str, Any]) -> list[tuple[str, str]]:
         ("Room", money(row.get("typical_room_charge"))),
         ("Board (meals)", money(row.get("typical_board_charge"))),
     ]
+    combined = _amount(row.get("room_board_charge"))
+    if combined and not _amount(row.get("typical_room_charge")):
+        facts.append(("Room and board (combined)", money(combined)))
     if meal_plan == 1 and meals:
         facts.append(("Meal plan", f"Offered, up to {meals} meals a week"))
     elif meal_plan in (1, 2):
@@ -463,17 +476,56 @@ def housing_facts(row: dict[str, Any]) -> list[tuple[str, str]]:
     return facts
 
 
+def typical_cost(row: dict[str, Any], year: int) -> dict[str, Any]:
+    """The school-wide typical yearly room cost (or room and board combined), or {}."""
+    room = _amount(row.get("typical_room_charge"))
+    if room:
+        return {"cents": room * 100, "kind": "room", "year": year}
+    combined = _amount(row.get("room_board_charge"))
+    if combined:
+        return {"cents": combined * 100, "kind": "room and board", "year": year}
+    return {}
+
+
 async def housing_characteristics(http: Http, unitid: str) -> list[tuple[str, str]]:
+    return (await ipeds_housing(http, unitid))["facts"]
+
+
+async def ipeds_housing(http: Http, unitid: str) -> dict[str, Any]:
+    """IPEDS facts and the typical cost from the newest year the school reported a cost."""
+    out: dict[str, Any] = {"facts": [], "typical": {}, "source": ""}
     if not unitid:
-        return []
-    data = await http.get_json(
-        IPEDS_CHARACTERISTICS,
-        provider="IPEDS",
-        params={"unitid": unitid},
-        cache_ttl=WEEK,
-    )
-    rows = data.get("results") if isinstance(data, dict) else None
-    return housing_facts(rows[0]) if isinstance(rows, list) and rows else []
+        return out
+
+    async def survey(year: int) -> Any:
+        try:
+            return await http.get_json(
+                f"{IPEDS_BASE}/institutional-characteristics/{year}/",
+                provider="IPEDS",
+                params={"unitid": unitid},
+                cache_ttl=WEEK,
+                # It runs alongside the site scrape, so a longer wait costs little.
+                timeout_seconds=IPEDS_COST_TIMEOUT,
+            )
+        except ProviderError:
+            return None
+
+    # Both years at once: the IPEDS service can be slow, and a slow year must not add up.
+    surveys = await asyncio.gather(*(survey(year) for year in IPEDS_COST_YEARS))
+    for year, data in zip(IPEDS_COST_YEARS, surveys, strict=True):
+        rows = data.get("results") if isinstance(data, dict) else None
+        if not isinstance(rows, list) or not rows:
+            continue
+        typical = typical_cost(rows[0], year)
+        if not out["facts"] or typical:
+            out = {
+                "facts": housing_facts(rows[0]),
+                "typical": typical,
+                "source": f"IPEDS {year} via Urban Institute Education Data API",
+            }
+        if typical:
+            break
+    return out
 
 
 # ---------------------------------------------------------------------------
@@ -965,20 +1017,26 @@ async def research(payload: dict[str, Any], http: Http, *, now: datetime) -> dic
         # Imported here: the housing scraper is built on this module's fetch rules.
         from resourcepilot.housing import find_housing_options
 
-        pages = await find_housing_pages(http, school["domain"])
-        try:
-            facts = await housing_characteristics(http, school["unitid"])
-        except ProviderError:
-            facts = []
-        halls = await find_housing_options(http, school["domain"], pages["office_url"])
+        async def pages_and_halls() -> tuple[dict[str, str], dict[str, Any]]:
+            pages = await find_housing_pages(http, school["domain"])
+            return pages, await find_housing_options(http, school["domain"], pages["office_url"])
+
+        # IPEDS and the school's own site are read at the same time.
+        (pages, halls), ipeds = await asyncio.gather(
+            pages_and_halls(), ipeds_housing(http, school["unitid"])
+        )
+        facts = ipeds["facts"]
         out["housing"] = {
             **pages,
             "facts": facts,
-            "facts_source": IPEDS_SOURCE if facts else "",
+            "facts_source": ipeds["source"] if facts else "",
+            "typical": ipeds["typical"],
             "options_status": halls["status"],
             "listing_url": halls["listing_url"],
             "options": halls["options"],
             "options_evidence": halls["evidence"],
+            "rates_url": halls.get("rates_url", ""),
+            "school_rates": halls.get("school_rates", []),
         }
         if not facts and not pages["office_url"] and not halls["options"]:
             raise ValueError(

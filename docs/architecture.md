@@ -83,6 +83,23 @@ like an application or portal. It then reads the halls (`resourcepilot/housing.p
    menus, headers, and footers removed, the name, an `og:image` on the school's domain, style, who
    it is for, room types, features, the lowest listed price annualized, and a short "about".
 
+Then prices (`resourcepilot/rates.py`), best first for each hall:
+
+1. the hall's own page;
+2. the school's rates page (a hand-checked page for a few schools, else the office's links that
+   read "rates", "costs", "fees", "billing"): a table row with an amount whose cells name the
+   hall, lowest regular row wins. Tables under a summer, study-abroad, transition, or fees heading
+   or tab are skipped. The period comes from the cell, the column header, or the sentence just
+   above the table; with none, the amount is shown as listed and never annualized. Rows that name
+   a room type but no hall are kept as school-wide rates;
+3. the hall's rate PDF, linked under the hall's name: the yearly row ("Annual cost", "Academic
+   year cost"), only its room columns (those the header names before any dining plan), as a
+   range.
+
+Pricing has its own budget (16 fetches, 15 seconds, at most 10 PDFs of 3MB). With no hall price,
+cards show the school's IPEDS typical cost from the newest year it reported (2023, then 2022):
+typical room charge, else room and board combined.
+
 Results are cached per domain. A school whose halls cannot be read gets the facts card.
 
 For wellness it finds the room system the same way but never pauses for a link: rooms are

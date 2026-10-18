@@ -1,5 +1,5 @@
 version = 1
-revision = 3
+revision = 5
 requires-python = ">=3.11, <3.14"
 
 [[package]]
@@ -1094,6 +1094,15 @@ wheels = [
 ]
 
 [[package]]
+name = "pypdf"
+version = "6.21.1"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/51/e1/32a9c4dbd94618145f8bab5c623bdb0a528f23fc8719afd77ba0278fd377/pypdf-6.21.1.tar.gz", hash = "sha256:2d62c383acd6e0dff0a96322ba8b1135229343b084d73c6f6cfd947fd291afcb", size = 7088597, upload-time = "2026-10-17T10:29:52.801Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/85/e6/24c944e473c34e818cf1b98085796fcd780465ecfe17663f2bf8fee1958b/pypdf-6.21.1-py3-none-any.whl", hash = "sha256:553e2d42f5bb3bb2a785a7d3de8ef90bb7df74b5413eff5a7b4388007ea9254b", size = 405134, upload-time = "2026-10-17T10:29:50.687Z" },
+]
+
+[[package]]
 name = "pytest"
 version = "8.4.2"
 source = { registry = "https://pypi.org/simple" }
@@ -1190,6 +1199,7 @@ source = { editable = "." }
 dependencies = [
     { name = "asyncpg" },
     { name = "httpx" },
+    { name = "pypdf" },
     { name = "python-dotenv" },
     { name = "uagents" },
 ]
@@ -1206,6 +1216,7 @@ dev = [
 requires-dist = [
     { name = "asyncpg", specifier = ">=0.30.0,<1" },
     { name = "httpx", specifier = ">=0.28.1,<1" },
+    { name = "pypdf", specifier = ">=5.4,<7" },
     { name = "python-dotenv", specifier = ">=1.1.0,<2" },
     { name = "uagents", specifier = ">=0.25.2,<0.26" },
 ]

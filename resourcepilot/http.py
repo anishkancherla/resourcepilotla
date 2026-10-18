@@ -44,6 +44,9 @@ class Page:
     status: int
     text: str
     location: str = ""
+    # The raw body, for documents that are not text (a school's rate PDF).
+    data: bytes = b""
+    content_type: str = ""
 
 
 def api_timeout() -> float:
@@ -111,11 +114,18 @@ class Http:
                     return Page(str(response.url), response.status_code, "", location)
                 body = await self._read(response, provider, max_bytes)
                 encoding = response.encoding or "utf-8"
+                content_type = response.headers.get("content-type", "")
         except httpx.TimeoutException:
             raise ProviderError(f"{provider} did not respond in time") from None
         except httpx.HTTPError:
             raise ProviderError(f"{provider} could not be reached") from None
-        return Page(str(response.url), response.status_code, body.decode(encoding, "replace"))
+        return Page(
+            str(response.url),
+            response.status_code,
+            body.decode(encoding, "replace"),
+            data=body,
+            content_type=content_type.split(";")[0].strip().lower(),
+        )
 
     async def get_json(self, url: str, *, provider: str, **kwargs: Any) -> Any:
         return await self.request("GET", url, provider=provider, **kwargs)

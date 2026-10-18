@@ -853,14 +853,33 @@ def _usd(cents: int) -> str:
     return f"${cents // 100:,}"
 
 
-def hall_price(hall: dict[str, Any]) -> str:
-    """How the hall's own page states its price, with a yearly figure to compare halls."""
+PRICE_SOURCES = {
+    "hall page": "the hall's own page",
+    "rates table": "the school's rates page",
+    "rates PDF": "the hall's rate schedule (PDF)",
+}
+
+
+def typical_text(typical: dict[str, Any] | None) -> str:
+    """The school-wide IPEDS figure, always labeled as a typical cost, never a hall's rate."""
+    if not typical or not typical.get("cents"):
+        return ""
+    return f"{_usd(int(typical['cents']))}/yr {typical['kind']} (IPEDS {typical['year']})"
+
+
+def hall_price(hall: dict[str, Any], typical: dict[str, Any] | None = None) -> str:
+    """The hall's own published price, else the school's typical cost, clearly labeled."""
     label, yearly = str(hall.get("price_label") or ""), int(hall.get("yearly_cents") or 0)
-    if not label or not yearly:
-        return "Price not listed on the hall's page"
-    if label.endswith(("year", "academic year")):
-        return f"From {label}"
-    return f"From {label} (about {_usd(yearly)} a year)"
+    if label and label.startswith("Room "):
+        return label
+    if label and yearly and not label.endswith(("year", "academic year")):
+        return f"From {label} (about {_usd(yearly)} a year)"
+    if label:
+        return f"From {label}" if yearly else label
+    school = typical_text(typical)
+    if school:
+        return f"Hall rate not published · school typical {school}"
+    return "Hall rate not published online"
 
 
 def _hall_subtitle(hall: dict[str, Any]) -> str:
@@ -893,6 +912,7 @@ def housing_carousel(
 ) -> tuple[str, dict[str, Any]]:
     """Every hall the Planner kept (or all of them), plus two items for facts and the full list."""
     school = str(data.get("school", {}).get("school_name") or "your school")
+    typical = dict(data.get("housing", {}).get("typical") or {})
     halls = list(data.get("all_halls" if show_all else "halls") or [])
     items: list[dict[str, Any]] = []
     for hall in halls:
@@ -900,7 +920,7 @@ def housing_carousel(
             "id": str(hall["option_id"]),
             "title": str(hall["name"]),
             "subtitle": _hall_subtitle(hall),
-            "secondary_text": hall_price(hall),
+            "secondary_text": hall_price(hall, typical),
             "badges": _hall_badges(hall),
             "primary_cta": {
                 "label": "View hall",
@@ -945,11 +965,14 @@ def housing_carousel(
         if facts.get("Dorm beds", "").replace(",", "").isdigit()
         else ""
     )
+    school_typical = typical_text(typical)
     return "carousel", {
         "title": f"On-campus housing at {school}",
         "subtitle": (
             f"{beds}{len(halls)} option{'s' if len(halls) != 1 else ''} from the school's own "
-            "pages, matches first. You apply on the school's site."
+            "pages, matches first."
+            + (f" Typical cost: {school_typical}." if school_typical else "")
+            + " You apply on the school's site."
         ),
         "items": items,
     }
@@ -976,8 +999,26 @@ def housing_detail(
             "value": ", ".join(HOUSING_FEATURES[key] for key in hall.get("features") or [])
             or "None listed",
         },
-        {"label": "Price", "value": hall_price(hall)},
+        {"label": "Price", "value": hall_price(hall, housing.get("typical"))},
     ]
+    if hall.get("price_source"):
+        rows.append(
+            {"label": "Price source", "value": f"From {PRICE_SOURCES[hall['price_source']]}"}
+        )
+    rates_url = str(hall.get("rates_url") or housing.get("rates_url") or "")
+    if rates_url:
+        rows.append({"label": "Official rates", "value": rates_url})
+    school_rates = list(housing.get("school_rates") or [])
+    if school_rates and not hall.get("price_label"):
+        rows.append(
+            {
+                "label": "School rates by room type",
+                "value": "; ".join(f"{rate['label']}: {rate['price']}" for rate in school_rates),
+            }
+        )
+    school_typical = typical_text(housing.get("typical"))
+    if school_typical:
+        rows.append({"label": "School typical cost", "value": school_typical})
     if hall.get("about"):
         rows.append({"label": "About", "value": str(hall["about"])})
     for key, value in (hall.get("checks") or {}).items():

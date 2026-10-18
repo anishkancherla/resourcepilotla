@@ -271,10 +271,17 @@ async def test_housing_shows_each_hall_matched_to_the_criteria(network) -> None:
     assert "matches first" in narration
     titles = [item["title"] for item in carousel["items"]]
     # Hillenbrand (upperclass) and Meredith South (graduate) are ruled out by their own pages.
-    assert titles == ["Earhart", "Show all 3 halls", "Housing facts and how to apply"]
-    earhart = carousel["items"][0]
+    assert titles == [
+        "Earhart",
+        "Cary Quadrangle",
+        "Show all 4 halls",
+        "Housing facts and how to apply",
+    ]
+    earhart, cary = carousel["items"][0], carousel["items"][1]
     assert earhart["badges"][0] == {"label": "Matches", "variant": "success"}
-    assert earhart["secondary_text"] == "Price not listed on the hall's page"
+    assert earhart["secondary_text"] == "From $3,762 per semester (about $7,524 a year)"
+    assert cary["secondary_text"] == "Room $12,708\u2013$17,649 a year"
+    assert "Typical cost: $5,970/yr room (IPEDS 2022)" in carousel["subtitle"]
 
     await network.send_user(chat(earhart["primary_cta"]["selection"]))
     _, detail, _ = last_card(network, "detail")
@@ -282,10 +289,18 @@ async def test_housing_shows_each_hall_matched_to_the_criteria(network) -> None:
     rows = {row["label"]: row["value"] for row in detail["summary_rows"]}
     assert rows["Style"] == "Traditional hall"
     assert rows["Your criteria · Air conditioning"] == "Fits"
+    assert rows["Price source"] == "From the school's rates page"
+    assert rows["Official rates"] == "https://housing.purdue.edu/my-housing/info/housing-rates.html"
+    assert rows["School typical cost"] == "$5,970/yr room (IPEDS 2022)"
     assert rows["Apply"].startswith("https://purdue.starrezhousing.com/StarRezPortalX/")
     assert "never applies" in rows["Apply"]
 
-    await network.send_user(chat(carousel["items"][1]["primary_cta"]["selection"]))
+    show_all = next(
+        item["primary_cta"]["selection"]
+        for item in carousel["items"]
+        if item["primary_cta"]["selection"]["action"] == "show_all_housing"
+    )
+    await network.send_user(chat(show_all))
     _, everything, _ = last_card(network, "carousel")
     by_title = {item["title"]: item for item in everything["items"]}
     assert by_title["Hillenbrand Hall"]["badges"][0]["label"] == "Doesn't fit: Who it's for"

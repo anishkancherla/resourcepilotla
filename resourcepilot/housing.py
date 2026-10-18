@@ -30,6 +30,7 @@ from typing import Any
 from urllib.parse import urldefrag, urlsplit
 
 from resourcepilot.http import Http, Page
+from resourcepilot.rates import price_halls
 from resourcepilot.research import (
     CONTROL_RE,
     DAY,
@@ -290,6 +291,7 @@ def read_hall(page: Page, domain: str, link_text: str) -> dict[str, Any] | None:
         return None
     yearly, price_label = _price(text)
     url = normalize(page.url)
+    priced = {"price_source": "hall page", "rates_url": url} if price_label else {}
     return {
         "option_id": f"hall_{sha256(url.encode()).hexdigest()[:10]}",
         "name": name,
@@ -304,6 +306,7 @@ def read_hall(page: Page, domain: str, link_text: str) -> dict[str, Any] | None:
         "features": [key for key, pattern in FEATURES if pattern.search(text)],
         "yearly_cents": yearly,
         "price_label": price_label,
+        **priced,
         "about": _about(metas, body),
     }
 
@@ -370,7 +373,7 @@ async def find_housing_options(
     http: Http, domain: str, office_url: str, *, budget: Budget | None = None
 ) -> dict[str, Any]:
     """Every hall the school lists, read from its own pages; ``status`` says how it went."""
-    cache_key = f"research:housing-options:{domain}:v1"
+    cache_key = f"research:housing-options:{domain}:v2"
     if http.cache is not None:
         cached = await http.cache.cache_get(cache_key)
         if isinstance(cached, dict) and cached.get("status"):
@@ -386,6 +389,7 @@ async def find_housing_options(
     candidates: dict[str, str] = {}
     seen: set[str] = set()
     listing = ""
+    read_pages: list[Page] = list(fetched.values())
     while queue and len(seen) < MAX_INDEX_PAGES:
         url = queue.pop(0)
         if url in seen:
@@ -394,6 +398,8 @@ async def find_housing_options(
         page = fetched.get(url) or await safe_page(http, url, domain, budget, HOUSING_VENDORS)
         if page is None:
             continue
+        if page not in read_pages:
+            read_pages.append(page)
         halls, categories = hall_links(page, domain)
         if halls and not listing:
             listing = page.url
@@ -415,10 +421,17 @@ async def find_housing_options(
         if option and key and key[0] not in names and key[1] not in names:
             names.update(key)
             options.append(option)
+    pricing = (
+        await price_halls(http, domain, options, read_pages)
+        if options
+        else {"rates_url": "", "school_rates": []}
+    )
     result: dict[str, Any] = {
         "status": "found" if options else "not_found",
         "listing_url": listing,
         "options": options,
+        "rates_url": pricing["rates_url"],
+        "school_rates": pricing["school_rates"],
         "evidence": (
             f"{len(options)} halls read from {urlsplit(listing).hostname}"
             if options
