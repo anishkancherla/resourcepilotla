@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """Mock Stripe demo buyer for the full hold-then-pay checkout.
 
-It chats with the Orchestrator like a person clicking cards: it sends the example request, picks
-the first bundle, holds everything, chooses Mock Stripe, and answers RequestPayment with a
-stripe_mock CommitPayment. It never calls Stripe and never moves any money.
+It chats with the Orchestrator like a person clicking cards: it submits the example demo-bundle
+form, picks the first bundle, holds everything, chooses Mock Stripe, and answers RequestPayment
+with a stripe_mock CommitPayment. It never calls Stripe and never moves any money.
 """
 
 from __future__ import annotations
@@ -33,7 +33,7 @@ from uagents_core.contrib.protocols.payment import (
     payment_protocol_spec,
 )
 
-from resourcepilot.cards import EXAMPLE_REQUEST
+from resourcepilot.cards import example_bundle_selection
 
 load_dotenv()
 ORCHESTRATOR = os.environ["ORCHESTRATOR_ADDRESS"]
@@ -73,7 +73,7 @@ def next_selection(kind: str, payload: dict[str, Any]) -> dict[str, Any] | None:
 @buyer.on_event("startup")
 async def start(ctx: Context) -> None:
     ctx.logger.warning("STRIPE_MOCK demo buyer: NO Stripe API call and NO money moves")
-    await ctx.send(ORCHESTRATOR, message(EXAMPLE_REQUEST))
+    await ctx.send(ORCHESTRATOR, message(example_bundle_selection()))
 
 
 @chat.on_message(model=ChatMessage)

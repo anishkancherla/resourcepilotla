@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import time
 from copy import deepcopy
 from datetime import datetime
 from typing import Any, Protocol
@@ -132,6 +133,11 @@ class DurableStore(Protocol):
 
     async def seller_records(self, seller_ids: list[str]) -> dict[str, dict[str, int]]: ...
 
+    # Live-provider response cache (Campus Researcher and Campus Rooms)
+    async def cache_get(self, key: str) -> Any | None: ...
+
+    async def cache_put(self, key: str, value: Any, ttl_seconds: int) -> None: ...
+
 
 def _active(hold: dict[str, Any], now: str) -> bool:
     if hold["status"] == "committed":
@@ -156,6 +162,7 @@ class MemoryStore:
         self.holds: dict[str, dict[str, Any]] = {}
         self.fault_modes: dict[str, str] = {}
         self.stats: dict[str, dict[str, int]] = {}
+        self.cache: dict[str, tuple[float, Any]] = {}
         self._lock = asyncio.Lock()
 
     async def setup(self) -> None:
@@ -440,6 +447,15 @@ class MemoryStore:
             for seller_id in seller_ids
         }
 
+    async def cache_get(self, key: str) -> Any | None:
+        entry = self.cache.get(key)
+        if entry is None or entry[0] <= time.time():
+            return None
+        return deepcopy(entry[1])
+
+    async def cache_put(self, key: str, value: Any, ttl_seconds: int) -> None:
+        self.cache[key] = (time.time() + ttl_seconds, deepcopy(value))
+
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS idempotency_keys (
@@ -490,6 +506,9 @@ CREATE TABLE IF NOT EXISTS seller_stats (
   quotes_sent INTEGER NOT NULL DEFAULT 0, no_responses INTEGER NOT NULL DEFAULT 0,
   holds_confirmed INTEGER NOT NULL DEFAULT 0, holds_failed INTEGER NOT NULL DEFAULT 0,
   bookings_committed INTEGER NOT NULL DEFAULT 0, bookings_failed INTEGER NOT NULL DEFAULT 0
+);
+CREATE TABLE IF NOT EXISTS api_cache (
+  key TEXT PRIMARY KEY, payload JSONB NOT NULL, expires_at TIMESTAMPTZ NOT NULL
 );
 """
 
@@ -931,6 +950,23 @@ class PostgresStore:
             seller_id: found.get(seller_id, dict.fromkeys(SELLER_COUNTERS, 0))
             for seller_id in seller_ids
         }
+
+    async def cache_get(self, key: str) -> Any | None:
+        value = await self._pool().fetchval(
+            "SELECT payload FROM api_cache WHERE key=$1 AND expires_at > now()", key
+        )
+        return json.loads(value) if isinstance(value, str) else value
+
+    async def cache_put(self, key: str, value: Any, ttl_seconds: int) -> None:
+        await self._pool().execute(
+            """INSERT INTO api_cache(key,payload,expires_at)
+               VALUES($1,$2::jsonb,now() + make_interval(secs => $3))
+               ON CONFLICT(key) DO UPDATE
+               SET payload=EXCLUDED.payload, expires_at=EXCLUDED.expires_at""",
+            key,
+            json.dumps(value),
+            float(ttl_seconds),
+        )
 
 
 def build_store() -> DurableStore:

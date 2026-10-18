@@ -217,3 +217,15 @@ async def test_fault_mode_round_trip(any_store: DurableStore, unique: str) -> No
     await any_store.set_fault_mode(unique, "ghost_holds")
     await any_store.set_fault_mode(unique, "none")
     assert await any_store.get_fault_mode(unique) == "none"
+
+
+async def test_api_cache_round_trips_and_expires(any_store: DurableStore, unique: str) -> None:
+    key = f"test:{unique}"
+    assert await any_store.cache_get(key) is None
+    value = {"purdue.edu": {"unitid": 243780, "name": "Purdue"}, "rows": [1, 2]}
+    await any_store.cache_put(key, value, 60)
+    assert await any_store.cache_get(key) == value
+    await any_store.cache_put(key, {"replaced": True}, 60)
+    assert await any_store.cache_get(key) == {"replaced": True}
+    await any_store.cache_put(key, value, 0)
+    assert await any_store.cache_get(key) is None

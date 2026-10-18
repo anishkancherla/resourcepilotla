@@ -10,7 +10,7 @@ manifest = ROOT / ".profiles.json"
 if not manifest.exists():
     raise SystemExit("Run `make bootstrap` first.")
 
-for kind, title in (("platform", "Platform agents"), ("seller", "Demo seller agents")):
+for kind, title in (("platform", "Platform agents"), ("seller", "Seller agents")):
     print(f"\n{title}")
     for profile in json.loads(manifest.read_text())["agents"]:
         if profile.get("kind", "platform") != kind:

@@ -65,6 +65,8 @@ def hold_request(hold_id: str, item_id: str, quantity: int = 1) -> HoldRequest:
 def test_every_seller_has_a_listing_and_valid_catalog() -> None:
     assert {seller.key for seller in SELLER_AGENTS} == set(LISTING_BY_ID)
     for listing in LISTINGS:
+        if listing.live:
+            continue
         catalog = load_catalog(listing.seller_id)
         assert catalog
         for item in catalog:
@@ -79,7 +81,10 @@ def test_every_seller_has_a_listing_and_valid_catalog() -> None:
 def test_registry_includes_exactly_one_unverified_seller() -> None:
     unverified = [listing.seller_id for listing in LISTINGS if not listing.identity_verified]
     assert unverified == ["flash_prints"]
-    assert all("Demo listing" in listing.verification_basis for listing in LISTINGS)
+    demo = [listing for listing in LISTINGS if not listing.live]
+    assert all("Demo listing" in listing.verification_basis for listing in demo)
+    assert [listing.seller_id for listing in LISTINGS if listing.live] == ["campus_rooms"]
+    assert {listing.seller_id for listing in listings_for(["study_room"])} == {"campus_rooms"}
     assert {listing.seller_id for listing in listings_for(["posters"])} == {
         "westwood_print",
         "gayley_copy",
@@ -162,7 +167,7 @@ async def test_hold_then_commit_is_idempotent() -> None:
 async def test_commit_rejects_expired_or_foreign_holds() -> None:
     store = MemoryStore()
     rooms, gear = LISTING_BY_ID["studio_rooms"], LISTING_BY_ID["gear_share"]
-    await place_hold(store, rooms, hold_request("h1", "study_room"), ttl_seconds=60, now=NOW)
+    await place_hold(store, rooms, hold_request("h1", "podcast_studio"), ttl_seconds=60, now=NOW)
     foreign = await commit_hold(
         store, gear, CommitHold(round_id="r", hold_id="h1", payment_reference="p"), now=NOW
     )

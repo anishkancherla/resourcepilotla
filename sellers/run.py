@@ -1,8 +1,11 @@
-"""Runtime for one independent demo seller agent, selected by SELLER_ID.
+"""Runtime for one independent seller agent, selected by SELLER_ID.
 
-Each seller is its own uAgent with its own seed, address, wallet, catalog, and profile. It
-speaks the ResourceHold seller role and the Agent Chat Protocol. It never takes payment: the
-buyer pays ResourcePilot's escrow, and the seller is paid out after every booking commits.
+Each seller is its own uAgent with its own seed, address, wallet, and profile. It speaks the
+ResourceHold seller role and the Agent Chat Protocol. It never takes payment: the buyer pays
+ResourcePilot's escrow, and the seller is paid out after every booking commits.
+
+Demo sellers answer from a catalog. Campus Rooms (``live`` in the registry) answers from the
+school's public LibCal pages instead, and every one of its offers is a free booking handoff.
 """
 
 from __future__ import annotations
@@ -23,6 +26,7 @@ from uagents_core.contrib.protocols.chat import (
 from resourcepilot import cards
 from resourcepilot.clock import utc_now
 from resourcepilot.config import env_bool, env_int, get_seller
+from resourcepilot.http import Http, build_http
 from resourcepilot.models import HealthResponse
 from resourcepilot.protocols import (
     BookingConfirmed,
@@ -38,6 +42,7 @@ from resourcepilot.protocols import (
 from resourcepilot.registry import CATEGORIES, LISTING_BY_ID
 from resourcepilot.store import store
 from sellers.inventory import build_offers, commit_hold, place_hold, resolve_fault_mode
+from sellers.live_rooms import commit_room, hold_room, quote_rooms
 
 load_dotenv()
 
@@ -61,6 +66,14 @@ agent = Agent(
 chat_proto = Protocol(spec=chat_protocol_spec)
 hold_proto = Protocol(spec=resource_hold_spec, role="seller")
 READY = False
+HTTP: Http | None = None
+
+
+def _http() -> Http:
+    global HTTP
+    if HTTP is None:
+        HTTP = build_http(store, follow_redirects=False)
+    return HTTP
 
 
 def _now() -> str:
@@ -96,7 +109,10 @@ async def handle_quote_request(ctx: Context, sender: str, request: QuoteRequest)
     if await resolve_fault_mode(store, LISTING.seller_id) == "ghost_quotes":
         ctx.logger.warning("Fault mode ghost_quotes: ignoring quote request %s", request.round_id)
         return
-    offers = await build_offers(store, LISTING, request, _now())
+    if LISTING.live:
+        offers = await quote_rooms(_http(), LISTING, request)
+    else:
+        offers = await build_offers(store, LISTING, request, _now())
     ctx.logger.info(
         "Quote for workflow %s: %d offers across %s",
         request.workflow_id,
@@ -131,7 +147,12 @@ async def handle_hold_request(ctx: Context, sender: str, request: HoldRequest) -
             ),
         )
         return
-    reply = await place_hold(store, LISTING, request, ttl_seconds=HOLD_TTL_SECONDS, now=_now())
+    if LISTING.live:
+        reply = await hold_room(
+            _http(), store, LISTING, request, ttl_seconds=HOLD_TTL_SECONDS, now=_now()
+        )
+    else:
+        reply = await place_hold(store, LISTING, request, ttl_seconds=HOLD_TTL_SECONDS, now=_now())
     ctx.logger.info(
         "Hold %s for workflow %s: %s",
         request.hold_id,
@@ -146,7 +167,10 @@ async def handle_commit(ctx: Context, sender: str, request: CommitHold) -> None:
     if await resolve_fault_mode(store, LISTING.seller_id) == "ghost_commits":
         ctx.logger.warning("Fault mode ghost_commits: ignoring commit %s", request.hold_id)
         return
-    reply = await commit_hold(store, LISTING, request, now=_now())
+    if LISTING.live:
+        reply = await commit_room(store, LISTING, request, now=_now())
+    else:
+        reply = await commit_hold(store, LISTING, request, now=_now())
     ctx.logger.info(
         "Commit %s: %s",
         request.hold_id,
@@ -189,21 +213,37 @@ async def handle_chat(ctx: Context, sender: str, message: ChatMessage) -> None:
         ("Verified listing" if LISTING.identity_verified else "Unverified", "info"),
     ]
     sells = ", ".join(CATEGORIES[category] for category in LISTING.categories)
+    if LISTING.live:
+        narration = (
+            f"I am {LISTING.display_name}. I read real open study rooms from a school's public "
+            "LibCal pages and hand you the school's booking link. Rooms are always free."
+        )
+        summary = "Live seller agent. Quotes real open library rooms as free booking handoffs."
+        facts = [
+            "Any school the Campus Researcher can match",
+            "ResourcePilot never reserves the room; you book with your own sign-in",
+        ]
+        badges[1] = ("Live \u00b7 LibCal", "info")
+    else:
+        narration = (
+            f"I am {LISTING.display_name}, a demo seller. I sell: {sells}. "
+            "Book me through the ResourcePilot Orchestrator."
+        )
+        summary = f"Demo seller agent. Sells {sells}."
+        facts = [
+            f"{LISTING.location_label} \u00b7 open {LISTING.open_hour}:00-{LISTING.close_hour}:00",
+            LISTING.verification_basis,
+        ]
     await ctx.send(
         sender,
         cards.card_message(
-            f"I am {LISTING.display_name}, a demo seller. I sell: {sells}. "
-            "Book me through the ResourcePilot Orchestrator.",
+            narration,
             *cards.status_card(
                 LISTING.display_name,
-                f"Demo seller agent. Sells {sells}.",
+                summary,
                 ORCHESTRATOR_ADDRESS,
                 badges=badges,
-                facts=[
-                    f"{LISTING.location_label} · open {LISTING.open_hour}:00-"
-                    f"{LISTING.close_hour}:00",
-                    LISTING.verification_basis,
-                ],
+                facts=facts,
                 extra_buttons=cards.demo_control_buttons(mode) if demo_controls else None,
             ),
         ),

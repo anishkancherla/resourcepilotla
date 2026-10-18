@@ -5,11 +5,13 @@ Identity is not trustworthiness, so a quote has to pass four independent layers:
 1. Identity: the quote came from the address ResourcePilot's registry lists for that seller, and
    the listing's identity is verified. uAgents envelopes are signed, so the sender address is
    authenticated by the transport.
-2. Protocol conformance: the quote speaks ResourceHold 1.0.0, prices in USD, offers a usable hold
+2. Protocol conformance: the quote speaks ResourceHold 1.1.0, prices in USD, offers a usable hold
    window, stays inside the seller's listed categories, and its arithmetic checks out.
 3. Track record: sellers that keep failing holds or bookings are excluded, and new sellers have
    a per-order spending cap.
-4. Policy: each offer must be available and the buyer must be eligible for it.
+4. Policy: each offer must be available and the buyer must be eligible for it. A live seller
+   (Campus Rooms) may only offer $0 handoff lines whose booking link is https on the school's
+   own domain or a known booking vendor.
 """
 
 from __future__ import annotations
@@ -19,6 +21,7 @@ from typing import Any
 from resourcepilot.config import env_int
 from resourcepilot.protocols import PROTOCOL_VERSION, quote_subtotal_cents
 from resourcepilot.registry import CATEGORIES, LISTING_BY_ID
+from resourcepilot.research import safe_url
 
 MIN_HOLD_TTL_SECONDS = 120
 TRACK_RECORD_MIN_ATTEMPTS = 3
@@ -80,8 +83,19 @@ def _protocol_problem(quote: dict[str, Any]) -> str | None:
     return None
 
 
+def _handoff_problem(offer: dict[str, Any], campus: dict[str, Any]) -> str | None:
+    if not offer.get("handoff") or int(offer.get("subtotal_cents") or 0) != 0:
+        return "Live rooms must be free handoff lines"
+    if not safe_url(str(offer.get("handoff_url") or ""), str(campus.get("domain") or "")):
+        return "Booking link is not on the school's site or a known booking system"
+    return None
+
+
 def vet_quotes(
-    brief: dict[str, Any], quotes: list[dict[str, Any]], records: dict[str, dict[str, int]]
+    brief: dict[str, Any],
+    quotes: list[dict[str, Any]],
+    records: dict[str, dict[str, int]],
+    campus: dict[str, Any] | None = None,
 ) -> tuple[list[dict[str, Any]], list[dict[str, str]], list[dict[str, Any]]]:
     """Return (trusted offers, rejections, per-seller vetting summary)."""
     offers: list[dict[str, Any]] = []
@@ -122,6 +136,14 @@ def vet_quotes(
                 reason = str(offer.get("unavailable_reason") or "Unavailable")
                 _reject(rejections, seller_id, "policy", reason, name)
                 continue
+            if listing.live:
+                problem = _handoff_problem(offer, campus or {})
+                if problem:
+                    _reject(rejections, seller_id, "policy", problem, name)
+                    continue
+            elif offer.get("handoff"):
+                _reject(rejections, seller_id, "policy", "Only live sellers offer handoffs", name)
+                continue
             if offer.get("requires_training") and not brief.get("has_training"):
                 _reject(rejections, seller_id, "policy", "Requires gear-share training", name)
                 continue
@@ -137,7 +159,9 @@ def vet_quotes(
             wanted = str(brief.get("camera_type", "any"))
             offer.update(
                 seller_name=listing.display_name,
-                location_label=listing.location_label,
+                location_label=str(offer.get("location_label") or listing.location_label)
+                if listing.live
+                else listing.location_label,
                 lat=listing.lat,
                 lon=listing.lon,
                 new_seller=is_new,
@@ -152,13 +176,21 @@ def vet_quotes(
 def verification_handler(payload: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
     brief = dict(payload["brief"])
     records = dict(context.get("seller_records", {}))
-    offers, rejections, summary = vet_quotes(brief, list(payload.get("quotes", [])), records)
+    campus = dict(payload.get("campus") or {})
+    offers, rejections, summary = vet_quotes(
+        brief, list(payload.get("quotes", [])), records, campus
+    )
     for seller_id in payload.get("no_response", []):
         _reject(rejections, str(seller_id), "availability", "Did not answer in time")
     covered = {offer["category"] for offer in offers}
     if not covered:
+        reasons = list(dict.fromkeys(r["reason"] for r in rejections if r["stage"] == "policy"))
+        if brief.get("service") == "rooms" and reasons:
+            raise ValueError(reasons[0])
         raise ValueError("No trustworthy seller could offer any of the requested resources")
+    carried = {key: payload[key] for key in ("campus", "school", "rooms") if key in payload}
     return {
+        **carried,
         "brief": brief,
         "offers": offers,
         "rejections": rejections,

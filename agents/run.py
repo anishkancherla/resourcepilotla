@@ -1,10 +1,13 @@
 """Runtime for one ResourcePilot platform agent, selected by AGENT_ROLE.
 
 Every role is its own process, seed, address, and profile. The Orchestrator delegates with
-``ctx.send``; specialists reply with correlated TaskResults. Discovery fans out to independent
+``ctx.send``; specialists reply with correlated TaskResults. The Campus Researcher turns a school
+email domain into the school's room system and housing pages. Discovery fans out to independent
 seller agents over the ResourceHold protocol. Checkout is hold-then-pay: the Checkout
 Coordinator holds every line with every seller, the buyer pays the Orchestrator's escrow over
 the Agent Payment Protocol, and only then are the holds committed and the sellers paid out.
+Free Campus Rooms lines are re-checked live and handed over as the school's booking link; they
+never need a payment.
 """
 
 from __future__ import annotations
@@ -36,18 +39,29 @@ from uagents_core.contrib.protocols.payment import (
 )
 
 from resourcepilot import cards
-from resourcepilot.checkout import failure_message, hold_plan, round_complete, round_outcome
+from resourcepilot.checkout import (
+    check_free_commit,
+    failure_message,
+    free_reference,
+    hold_plan,
+    is_free_bundle,
+    round_complete,
+    round_outcome,
+)
 from resourcepilot.clock import later, parse, utc_now
 from resourcepilot.config import (
     ROLE_BY_KEY,
-    SPECIALIST_CHAIN,
+    SERVICES,
+    SPECIALISTS,
     agent_addresses,
     env_bool,
     env_int,
     get_role,
+    service_chain,
 )
 from resourcepilot.escrow import CosmpyPayoutGateway, refund_buyer, settle_booking
-from resourcepilot.intake import SAVED_PREFERENCES, parse_request_text, upcoming_days
+from resourcepilot.http import Http, ProviderError, build_http
+from resourcepilot.intake import SAVED_PREFERENCES, scrub_fields
 from resourcepilot.models import (
     AuditEvent,
     HealthResponse,
@@ -76,9 +90,11 @@ from resourcepilot.protocols import (
     seller_protocol_digest,
 )
 from resourcepilot.registry import LISTING_BY_ID, listings_for
+from resourcepilot.research import recheck_link, research
 from resourcepilot.store import store
 from resourcepilot.workflow import (
     accept_result,
+    advance_to,
     begin_workflow,
     execute_specialist,
     is_timed_out,
@@ -115,6 +131,15 @@ ESCROW_WALLET = str(agent.wallet.address())
 ledger = CosmpyLedgerGateway()
 payouts = CosmpyPayoutGateway(agent.wallet)
 READY = False
+HTTP: Http | None = None
+
+
+def _http() -> Http:
+    """Live public sources, used only by the Campus Researcher and Seller Verification."""
+    global HTTP
+    if HTTP is None:
+        HTTP = build_http(store)
+    return HTTP
 
 
 def _session(ctx: Context) -> str:
@@ -141,6 +166,29 @@ async def _send_card(
 ) -> None:
     kind, payload = card
     await ctx.send(target, cards.card_message(narration, kind, payload, terminal=terminal))
+
+
+async def _notice(
+    ctx: Context,
+    target: str,
+    title: str,
+    body: str,
+    *,
+    badge: str | None = None,
+    variant: str = "info",
+    buttons: list[tuple[str, dict[str, Any]]] | None = None,
+) -> None:
+    """Every Orchestrator reply is a card; a short notice replaces plain text."""
+    await _send_card(
+        ctx,
+        target,
+        body,
+        cards.notice_card(title, body, badge=badge, variant=variant, buttons=buttons),
+    )
+
+
+def _status_button(workflow_id: str) -> tuple[str, dict[str, Any]]:
+    return ("Show status", {"action": "show_status", "workflow_id": workflow_id})
 
 
 async def _audit(ctx: Context, state: dict[str, Any], event_type: str, **details: Any) -> None:
@@ -227,18 +275,43 @@ async def handle_chat(ctx: Context, sender: str, message: ChatMessage) -> None:
     await _orchestrator_chat(ctx, sender, text, cards.parse_selection(text))
 
 
-async def _start_workflow(ctx: Context, sender: str, request: dict[str, Any]) -> None:
-    request["saved_preferences"] = await store.get_preference(sender)
+FORM_PROMPTS = {
+    "rooms": "Enter your school email and when you need a room. Only the domain is kept.",
+    "housing": "Enter your school email. Only the domain is kept.",
+    "bundle": "Demo shops near UCLA. Add your school email to include a free study room.",
+}
+FIELD_LIMIT = 200
+
+
+def _form_fields(selection: dict[str, Any]) -> dict[str, Any]:
+    """Bounded scalar fields from a form submission, with any email reduced to its domain."""
+    fields = {
+        str(key)[:40]: str(value)[:FIELD_LIMIT] if isinstance(value, str) else value
+        for key, value in selection.items()
+        if key not in {"action", "selection", "service"}
+        and isinstance(value, str | int | float | bool)
+    }
+    return scrub_fields(fields)
+
+
+async def _start_workflow(ctx: Context, sender: str, service: str, fields: dict[str, Any]) -> None:
+    request = {
+        "service": service,
+        "fields": fields,
+        "saved_preferences": await store.get_preference(sender),
+    }
     task = await begin_workflow(store, requester=sender, session_id=_session(ctx), request=request)
     state = await store.get_workflow(task.workflow_id)
     assert state is not None
-    await _audit(ctx, state, "workflow_started", stage="intake")
+    await _audit(ctx, state, "workflow_started", stage="intake", service=service)
     await _dispatch(ctx, task)
+    chain = service_chain(service, {"brief": {"school_domain": fields.get("school_domain")}})
+    names = ", ".join(ROLE_BY_KEY[role].name.removeprefix("ResourcePilot ") for role in chain)
     await _send_card(
         ctx,
         sender,
-        "Got it. Intake, Discovery, Verification, Analysis, and Planner are on it.",
-        cards.progress_card(task.workflow_id, "intake"),
+        f"Got it. {names} are on it.",
+        cards.progress_card(task.workflow_id, "intake", chain),
     )
 
 
@@ -246,21 +319,18 @@ async def _orchestrator_chat(
     ctx: Context, sender: str, text: str, selection: dict[str, Any]
 ) -> None:
     action = str(selection.get("action", "")).strip()
-    if not action and text and parse_request_text(text).get("items"):
-        # A plain sentence that names resources is a request, not small talk.
-        action, selection = "submit_text", {"text": text}
-    if not action or action == "start_over":
-        await _send_card(ctx, sender, "What do you need to book?", cards.welcome_card())
+    if not action or action in {"start_over", "open_form", "open_orchestrator"}:
+        narration = "Pick a campus service."
+        if text and not selection:
+            narration = "ResourcePilot works from buttons and forms. Pick a campus service."
+        await _send_card(ctx, sender, narration, cards.welcome_card())
         return
-    if action == "open_form":
-        await _send_card(ctx, sender, "Fill in what you need.", cards.request_form(upcoming_days()))
+    service = str(selection.get("service", "")).strip()
+    if action == "open_service" and service in SERVICES:
+        await _send_card(ctx, sender, FORM_PROMPTS[service], cards.service_form(service))
         return
-    if action == "submit_text":
-        await _start_workflow(ctx, sender, {"text": str(selection.get("text") or text)[:500]})
-        return
-    if action == "submit_form":
-        fields = {key: value for key, value in selection.items() if key != "action"}
-        await _start_workflow(ctx, sender, {"fields": fields})
+    if action == "submit_form" and service in SERVICES:
+        await _start_workflow(ctx, sender, service, _form_fields(selection))
         return
     if action == "show_bookings":
         await _send_card(
@@ -278,7 +348,14 @@ async def _orchestrator_chat(
         else await store.find_workflow(sender, _session(ctx))
     )
     if state is None or state.get("requester") != sender:
-        await ctx.send(sender, cards.text_message("I could not find that request. Start over?"))
+        await _notice(
+            ctx,
+            sender,
+            "Request not found",
+            "I could not find that request. Pick a service to start again.",
+            badge="Not found",
+            variant="warning",
+        )
         return
     await _workflow_action(ctx, sender, action, selection, state)
 
@@ -294,13 +371,29 @@ def _bundle(state: dict[str, Any], bundle_id: str) -> dict[str, Any] | None:
     )
 
 
-async def _show_bundles(ctx: Context, sender: str, state: dict[str, Any]) -> None:
+async def _show_bundles(
+    ctx: Context, sender: str, state: dict[str, Any], *, note: str = ""
+) -> None:
     data = state["data"]
+    prefix = f"{note} " if note else ""
+    if data["brief"].get("service") == "rooms":
+        school = str(data.get("school", {}).get("school_name") or "your school")
+        count = len(data["bundles"])
+        await _send_card(
+            ctx,
+            sender,
+            f"{prefix}{count} open room{'s' if count != 1 else ''} at {school}, earliest first. "
+            "They are free; you book on your school's site.",
+            cards.rooms_carousel(str(state["workflow_id"]), list(data["bundles"]), school),
+        )
+        return
     rejected = len(data.get("rejections", []))
     names = sorted(
         {r["seller_name"] for r in data.get("rejections", []) if r["stage"] == "identity"}
     )
-    narration = f"I vetted the quotes and built {len(data['bundles'])} bundles within budget."
+    narration = (
+        f"{prefix}I vetted the quotes and built {len(data['bundles'])} demo bundles within budget."
+    )
     if names:
         narration += f" Excluded for identity: {', '.join(names)}."
     if data.get("uncovered"):
@@ -325,10 +418,13 @@ def _holds_expired(state: dict[str, Any]) -> bool:
 
 
 async def _show_review(ctx: Context, sender: str, state: dict[str, Any]) -> None:
+    free = is_free_bundle(state["bundle"])
     await _send_card(
         ctx,
         sender,
-        "Every seller is holding your items. Review the total, then choose how to pay.",
+        "The room is still open. Get the booking link and book it with your own sign-in."
+        if free
+        else "Every seller is holding your items. Review the total, then choose how to pay.",
         cards.holds_review_card(
             str(state["workflow_id"]),
             state["data"]["brief"],
@@ -354,7 +450,8 @@ async def _show_payment_options(ctx: Context, sender: str, state: dict[str, Any]
 
 
 async def _send_receipt(ctx: Context, sender: str, state: dict[str, Any], narration: str) -> None:
-    payment = await store.get_payment(str(state["payment_reference"]))
+    reference = str(state.get("payment_reference") or "")
+    payment = None if reference.startswith("free:") else await store.get_payment(reference)
     receipt = state["receipt"]
     await _send_card(
         ctx,
@@ -381,8 +478,15 @@ async def _workflow_action(
                 ctx,
                 sender,
                 "A specialist did not answer in time. Your request is saved.",
-                cards.error_card("A specialist timed out. Start over to try again."),
+                cards.error_card(
+                    "A specialist timed out. Start over to try again.",
+                    service=str(state.get("service") or ""),
+                ),
             )
+        elif state["status"] == "awaiting_link":
+            await _ask_for_link(ctx, sender, state)
+        elif state["status"] == "answered":
+            await _show_housing(ctx, sender, state)
         elif state["status"] == "awaiting_selection":
             await _show_bundles(ctx, sender, state)
         elif state["status"] == "awaiting_payment":
@@ -400,7 +504,7 @@ async def _workflow_action(
                 ctx,
                 sender,
                 f"Current status: {state['status'].replace('_', ' ')}.",
-                cards.progress_card(workflow_id, str(state["stage"])),
+                cards.progress_card(workflow_id, str(state["stage"]), _chain(state)),
             )
         return
     if action == "show_vetting":
@@ -411,12 +515,24 @@ async def _workflow_action(
             cards.vetting_card(workflow_id, list(state.get("data", {}).get("rejections", []))),
         )
         return
+    if action == "submit_link":
+        await _submit_link(ctx, sender, state, str(selection.get("booking_link") or ""))
+        return
+    if action == "skip_room":
+        await _skip_room(ctx, sender, state)
+        return
+    if action == "confirm_free":
+        await _confirm_free(ctx, sender, state)
+        return
     bundle = _bundle(state, str(selection.get("bundle_id", "")))
     if action == "view_bundle" and bundle:
+        rooms = state["data"]["brief"].get("service") == "rooms"
         await _send_card(
             ctx,
             sender,
-            f"{bundle['label']}: {usd(bundle['total_cents'])} from "
+            f"{bundle['lines'][0]['name']}: free, re-checked live before you book."
+            if rooms
+            else f"{bundle['label']}: {usd(bundle['total_cents'])} from "
             f"{bundle['seller_count']} vetted sellers.",
             cards.bundle_detail(
                 workflow_id,
@@ -447,7 +563,114 @@ async def _workflow_action(
     if action == "refund":
         await _refund(ctx, sender, state, automatic=False)
         return
-    await ctx.send(sender, cards.text_message("That action is not valid for this request."))
+    await _notice(
+        ctx,
+        sender,
+        "Not available",
+        "That action is not valid for this request right now.",
+        badge="Not available",
+        variant="warning",
+        buttons=[_status_button(workflow_id), ("Start over", {"action": "start_over"})],
+    )
+
+
+def _chain(state: dict[str, Any]) -> tuple[str, ...]:
+    return service_chain(str(state.get("service") or "bundle"), state.get("data") or {})
+
+
+async def _show_housing(ctx: Context, sender: str, state: dict[str, Any]) -> None:
+    school = str(state["data"].get("school", {}).get("school_name") or "your school")
+    await _send_card(
+        ctx,
+        sender,
+        f"Housing at {school}: official facts and links. You apply on the school's site.",
+        cards.housing_card(state["data"]),
+    )
+
+
+async def _ask_for_link(ctx: Context, sender: str, state: dict[str, Any]) -> None:
+    data = state["data"]
+    school = str(data.get("school", {}).get("school_name") or "your school")
+    narration = (
+        f"{data['link_error']}. Paste the booking link again."
+        if data.get("link_error")
+        else f"I could not find {school}'s room-booking system. Paste the booking link and I "
+        "will check it."
+    )
+    await _send_card(
+        ctx,
+        sender,
+        narration,
+        cards.room_link_card(
+            str(state["workflow_id"]), school, str(state.get("service") or "rooms")
+        ),
+    )
+
+
+async def _submit_link(ctx: Context, sender: str, state: dict[str, Any], link: str) -> None:
+    """Send the pasted link back to the Researcher, which verifies it like a found one."""
+    if state["status"] != "awaiting_link":
+        return
+    if not link.strip():
+        await _ask_for_link(ctx, sender, state)
+        return
+    if not await store.claim("submit_link", f"{state['workflow_id']}:{link.strip()[:300]}"):
+        return
+    data = dict(state["data"])
+    data.pop("needs_link", None)
+    data.pop("link_error", None)
+    data["brief"] = {**data["brief"], "booking_link": link.strip()[:300]}
+    task, state = await advance_to(
+        store,
+        workflow_id=str(state["workflow_id"]),
+        requester=sender,
+        session_id=str(state["session_id"]),
+        next_role="researcher",
+        payload=data,
+    )
+    await _dispatch(ctx, task)
+    await _send_card(
+        ctx,
+        sender,
+        "Checking that link on your school's site.",
+        cards.progress_card(task.workflow_id, "researcher", _chain(state)),
+    )
+
+
+async def _skip_room(ctx: Context, sender: str, state: dict[str, Any]) -> None:
+    """Continue a project bundle without the study room the Researcher could not place."""
+    if state["status"] != "awaiting_link" or state.get("service") != "bundle":
+        return
+    data = dict(state["data"])
+    data.pop("needs_link", None)
+    data.pop("link_error", None)
+    items = {k: v for k, v in data["brief"]["items"].items() if k != "study_room"}
+    if not items:
+        await _send_card(
+            ctx,
+            sender,
+            "Without the study room this bundle is empty.",
+            cards.error_card("Pick at least one demo item.", service="bundle"),
+        )
+        return
+    data["brief"] = {**data["brief"], "items": items}
+    if not await store.claim("skip_room", str(state["workflow_id"])):
+        return
+    task, state = await advance_to(
+        store,
+        workflow_id=str(state["workflow_id"]),
+        requester=sender,
+        session_id=str(state["session_id"]),
+        next_role="discovery",
+        payload=data,
+    )
+    await _dispatch(ctx, task)
+    await _send_card(
+        ctx,
+        sender,
+        "Skipping the study room. Collecting quotes from the demo shops.",
+        cards.progress_card(task.workflow_id, "discovery", _chain(state)),
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -470,8 +693,12 @@ async def _start_hold_round(
     if state["status"] != from_status or not await store.claim(
         "place_holds", f"{workflow_id}:{attempt}"
     ):
-        await ctx.send(
-            sender, cards.text_message("Holds are already in progress for this request.")
+        await _notice(
+            ctx,
+            sender,
+            "Already in progress",
+            "Holds are already in progress for this request.",
+            buttons=[_status_button(workflow_id)],
         )
         return None
     task = make_task(
@@ -479,7 +706,12 @@ async def _start_hold_round(
         requester=sender,
         session_id=str(state["session_id"]),
         target_role="fulfillment",
-        payload={"phase": "hold", "brief": state["data"]["brief"], "bundle": bundle},
+        payload={
+            "phase": "hold",
+            "brief": state["data"]["brief"],
+            "bundle": bundle,
+            "campus": dict(state["data"].get("campus") or {}),
+        },
     )
     state = await store.patch_workflow(
         workflow_id,
@@ -507,16 +739,56 @@ async def _place_holds(
         await _send_card(
             ctx,
             sender,
-            f"Asking {bundle['seller_count']} sellers to hold everything at once. "
+            "Re-checking that room live on your school's site."
+            if is_free_bundle(bundle)
+            else f"Asking {bundle['seller_count']} sellers to hold everything at once. "
             "No money moves yet.",
             cards.progress_card(str(state["workflow_id"]), "holds"),
         )
 
 
+async def _confirm_free(ctx: Context, sender: str, state: dict[str, Any]) -> None:
+    """Hand over booking links for an all-free bundle. No payment record is ever created."""
+    workflow_id = str(state["workflow_id"])
+    if state["status"] != "awaiting_payment" or not is_free_bundle(state.get("bundle") or {}):
+        await _notice(
+            ctx,
+            sender,
+            "Not available",
+            "There is no free booking link waiting for this request.",
+            buttons=[_status_button(workflow_id)],
+        )
+        return
+    if _holds_expired(state):
+        await _release_holds(ctx, sender, state, "The re-check expired")
+        return
+    if not await store.claim("confirm_free", f"{workflow_id}:{state.get('hold_attempt', 0)}"):
+        return
+    state = await store.patch_workflow(
+        workflow_id, {"payment_reference": free_reference(workflow_id)}
+    )
+    state = await _dispatch_commit(ctx, state, free_reference(workflow_id))
+    await _audit(ctx, state, "free_handoff_confirmed")
+    await _send_card(
+        ctx,
+        sender,
+        "Getting your booking link.",
+        cards.progress_card(workflow_id, "booking"),
+    )
+
+
 async def _retry_booking(ctx: Context, sender: str, state: dict[str, Any]) -> None:
     payment = await store.get_payment(str(state.get("payment_reference") or ""))
     if state["status"] != "booking_failed" or payment is None or payment["status"] != "released":
-        await ctx.send(sender, cards.text_message("A retry is not available for this request."))
+        await _notice(
+            ctx,
+            sender,
+            "Retry not available",
+            "A retry is not available for this request.",
+            badge="Not available",
+            variant="warning",
+            buttons=[_status_button(str(state["workflow_id"]))],
+        )
         return
     if await _start_hold_round(
         ctx, sender, state, state["bundle"], from_status="booking_failed", retrying=True
@@ -550,7 +822,8 @@ async def _dispatch_commit(ctx: Context, state: dict[str, Any], reference: str) 
     try:
         await _dispatch(ctx, task)
     except Exception:
-        await store.release_payment(reference, "dispatch to Checkout Coordinator failed")
+        if not reference.startswith("free:"):
+            await store.release_payment(reference, "dispatch to Checkout Coordinator failed")
         raise
     return state
 
@@ -572,17 +845,24 @@ async def _release_hold_list(
 
 async def _release_holds(ctx: Context, sender: str, state: dict[str, Any], reason: str) -> None:
     if state["status"] not in {"awaiting_payment", "payment_requested"}:
-        await ctx.send(sender, cards.text_message("There are no active holds to release."))
+        await _notice(
+            ctx,
+            sender,
+            "Nothing to release",
+            "There are no active holds to release.",
+            buttons=[_status_button(str(state["workflow_id"]))],
+        )
         return
     reference = state.get("payment_reference")
     if reference and not await store.cancel_payment(str(reference), reason):
         payment = await store.get_payment(str(reference))
         if payment and payment["status"] != "cancelled":
-            await ctx.send(
+            await _notice(
+                ctx,
                 sender,
-                cards.text_message(
-                    "Your payment was already received, so the holds stay in place."
-                ),
+                "Payment received",
+                "Your payment was already received, so the holds stay in place.",
+                buttons=[_status_button(str(state["workflow_id"]))],
             )
             return
     await _release_hold_list(ctx, state, list(state.get("holds", [])), reason)
@@ -597,15 +877,20 @@ async def _release_holds(ctx: Context, sender: str, state: dict[str, Any], reaso
         },
     )
     await _audit(ctx, state, "holds_released", reason=reason)
-    await ctx.send(
-        sender, cards.text_message(f"{reason}. Every hold was released; nothing was charged.")
+    await _show_bundles(
+        ctx, sender, state, note=f"{reason}. Every hold was released; nothing was charged."
     )
-    await _show_bundles(ctx, sender, state)
 
 
 async def _request_payment(ctx: Context, sender: str, state: dict[str, Any], method: str) -> None:
     if state["status"] not in {"awaiting_payment", "payment_requested"}:
-        await ctx.send(sender, cards.text_message("Payment is not open for this request."))
+        await _notice(
+            ctx,
+            sender,
+            "Payment not open",
+            "Payment is not open for this request.",
+            buttons=[_status_button(str(state["workflow_id"]))],
+        )
         return
     if _holds_expired(state):
         await _release_holds(ctx, sender, state, "The holds expired before payment")
@@ -614,7 +899,15 @@ async def _request_payment(ctx: Context, sender: str, state: dict[str, Any], met
     try:
         config = PaymentConfig.for_total(method, int(bundle["total_cents"]), ESCROW_WALLET)
     except ValueError as exc:
-        await ctx.send(sender, cards.text_message(f"Payment configuration error: {exc}"))
+        await _notice(
+            ctx,
+            sender,
+            "Payment unavailable",
+            f"Payment configuration error: {exc}",
+            badge="Needs attention",
+            variant="warning",
+            buttons=[_status_button(str(state["workflow_id"]))],
+        )
         return
     previous = state.get("payment_reference")
     if previous:
@@ -638,6 +931,7 @@ async def _request_payment(ctx: Context, sender: str, state: dict[str, Any], met
     )
     hold_seconds = int((parse(str(state["holds_expire_at"])) - utc_now()).total_seconds())
     mock = config.mode == STRIPE_MOCK
+    priced = [line for line in bundle["lines"] if not line.get("handoff")]
     await ctx.send(
         sender,
         RequestPayment(
@@ -650,8 +944,8 @@ async def _request_payment(ctx: Context, sender: str, state: dict[str, Any], met
             deadline_seconds=max(60, min(PAYMENT_DEADLINE_SECONDS, hold_seconds)),
             reference=reference,
             description=(
-                f"ResourcePilot escrow for {len(bundle['lines'])} bookings with "
-                f"{bundle['seller_count']} sellers"
+                f"ResourcePilot escrow for {len(priced)} bookings with "
+                f"{len({line['seller_id'] for line in priced})} sellers"
             ),
             metadata={
                 "fet_network": config.network,
@@ -665,13 +959,18 @@ async def _request_payment(ctx: Context, sender: str, state: dict[str, Any], met
         ),
     )
     await _audit(ctx, state, "payment_requested", reference=reference, mode=config.mode)
-    await ctx.send(
+    await _notice(
+        ctx,
         sender,
-        cards.text_message(
-            "Payment requested. Mock Stripe is simulated and moves no money."
-            if mock
-            else f"Payment requested: {config.amount} test FET on stable-testnet."
-        ),
+        "Payment requested",
+        "Payment requested. Mock Stripe is simulated and moves no money."
+        if mock
+        else f"Payment requested: {config.amount} test FET on stable-testnet.",
+        badge="Mock Stripe \u00b7 no money" if mock else "Test FET",
+        buttons=[
+            _status_button(str(state["workflow_id"])),
+            ("Release holds", {"action": "release_holds", "workflow_id": state["workflow_id"]}),
+        ],
     )
 
 
@@ -711,7 +1010,13 @@ async def handle_commit(ctx: Context, sender: str, commit: CommitPayment) -> Non
         or state["status"] != "payment_requested"
         or not await store.reserve_payment(reference)
     ):
-        await ctx.send(sender, cards.text_message("Payment already received for this request."))
+        await _notice(
+            ctx,
+            sender,
+            "Already received",
+            "Payment already received for this request.",
+            buttons=[_status_button(str(state["workflow_id"]))],
+        )
         return
     state = await _dispatch_commit(ctx, state, reference)
     await _audit(ctx, state, "payment_verified", reference=reference, mode=config.mode)
@@ -731,7 +1036,7 @@ async def handle_reject(ctx: Context, sender: str, message: RejectPayment) -> No
     if state and state["status"] == "payment_requested":
         await _release_holds(ctx, sender, state, "Payment was declined")
         return
-    await ctx.send(sender, cards.text_message("Payment declined. Nothing was charged."))
+    await _notice(ctx, sender, "Payment declined", "Payment declined. Nothing was charged.")
 
 
 async def _checkout_result(ctx: Context, result: TaskResult) -> None:
@@ -767,9 +1072,12 @@ async def _holds_result(ctx: Context, state: dict[str, Any], result: TaskResult)
             state = await store.patch_workflow(workflow_id, holds)
             if not await store.reserve_payment(reference):
                 await _release_hold_list(ctx, state, holds["holds"], "Payment left escrow")
-                await ctx.send(
+                await _notice(
+                    ctx,
                     requester,
-                    cards.text_message("Your payment is no longer in escrow; holds released."),
+                    "Holds released",
+                    "Your payment is no longer in escrow, so the holds were released.",
+                    buttons=[_status_button(workflow_id)],
                 )
                 return
             state = await _dispatch_commit(ctx, state, reference)
@@ -798,13 +1106,22 @@ async def _holds_result(ctx: Context, state: dict[str, Any], result: TaskResult)
         state = await store.patch_workflow(
             workflow_id, {"status": "awaiting_selection", "stage": "selection", "error": error}
         )
-        await ctx.send(requester, cards.text_message(f"{error}. Nothing was charged."))
-        await _show_bundles(ctx, requester, state)
+        await _show_bundles(ctx, requester, state, note=f"{error}. Nothing was charged.")
         return
-    # Reroute: ask the Bundle Planner again without the sellers that failed.
+    # Reroute: ask the Bundle Planner again without the sellers that failed. A live room that
+    # was just taken says nothing bad about Campus Rooms, so only that one room is dropped.
+    live = {seller for seller in failed if seller in LISTING_BY_ID and LISTING_BY_ID[seller].live}
+    taken = [
+        str(item)
+        for item in result.payload.get("failed_items", [])
+        if str(item).split(":", 1)[0] in live
+    ]
     payload = {
         **state["data"],
-        "exclude_sellers": sorted({*state["data"].get("exclude_sellers", []), *failed}),
+        "exclude_sellers": sorted(
+            {*state["data"].get("exclude_sellers", []), *(set(failed) - live)}
+        ),
+        "exclude_items": sorted({*state["data"].get("exclude_items", []), *taken}),
     }
     task = make_task(
         workflow_id=workflow_id,
@@ -826,13 +1143,13 @@ async def _holds_result(ctx: Context, state: dict[str, Any], result: TaskResult)
     )
     await _audit(ctx, state, "reroute_requested", exclude_sellers=payload["exclude_sellers"])
     await _dispatch(ctx, task)
-    await _send_card(
-        ctx,
-        requester,
-        f"{error}. Nothing was charged, and every other hold was released. "
-        "The Bundle Planner is rerouting around them.",
-        cards.progress_card(workflow_id, "planner"),
+    narration = (
+        f"{error}. Showing the other open rooms."
+        if state["data"]["brief"].get("service") == "rooms"
+        else f"{error}. Nothing was charged, and every other hold was released. "
+        "The Bundle Planner is rerouting around them."
     )
+    await _send_card(ctx, requester, narration, cards.progress_card(workflow_id, "planner"))
 
 
 async def _booking_result(ctx: Context, state: dict[str, Any], result: TaskResult) -> None:
@@ -840,10 +1157,13 @@ async def _booking_result(ctx: Context, state: dict[str, Any], result: TaskResul
         await _booking_failed(ctx, state, str(result.error or "A seller could not confirm"))
         return
     reference = str(state["payment_reference"])
-    payment = await store.get_payment(reference)
-    assert payment is not None
-    ledger_entries = await settle_booking(store, payouts, payment, state["bundle"])
-    await store.deliver_payment(reference)
+    if reference.startswith("free:"):
+        ledger_entries: list[dict[str, Any]] = []
+    else:
+        payment = await store.get_payment(reference)
+        assert payment is not None
+        ledger_entries = await settle_booking(store, payouts, payment, state["bundle"])
+        await store.deliver_payment(reference)
     bookings = [
         {key: value for key, value in booking.items() if key != "address"}
         for booking in result.payload["bookings"]
@@ -857,13 +1177,18 @@ async def _booking_result(ctx: Context, state: dict[str, Any], result: TaskResul
         },
     )
     await _audit(ctx, state, "booked", reference=reference, sellers=state["bundle"]["seller_count"])
-    await _send_receipt(
-        ctx,
-        result.requester,
-        state,
-        f"Booked with all {state['bundle']['seller_count']} sellers. "
-        "The receipt shows each seller's payout from escrow.",
-    )
+    if reference.startswith("free:"):
+        narration = (
+            "Here is your booking link. Open it and book with your own sign-in; "
+            "ResourcePilot did not reserve the room."
+        )
+    else:
+        narration = (
+            "Booked with every paid seller. The receipt shows each seller's payout from escrow."
+        )
+        if any(line.get("handoff") for line in state["bundle"]["lines"]):
+            narration += " Your free study room link is on the receipt; book it yourself."
+    await _send_receipt(ctx, result.requester, state, narration)
 
 
 # ---------------------------------------------------------------------------
@@ -889,6 +1214,24 @@ async def _show_recovery(ctx: Context, sender: str, state: dict[str, Any]) -> No
 
 async def _booking_failed(ctx: Context, state: dict[str, Any], error: str) -> None:
     """Keep the verified payment as a retryable escrow entitlement, refundable at any time."""
+    if str(state.get("payment_reference") or "").startswith("free:"):
+        # Nothing was paid, so there is nothing to keep: go back to the room options.
+        state = await store.patch_workflow(
+            str(state["workflow_id"]),
+            {
+                "status": "awaiting_selection",
+                "stage": "selection",
+                "holds": [],
+                "holds_expire_at": None,
+                "payment_reference": None,
+                "error": error,
+            },
+        )
+        await _audit(ctx, state, "free_handoff_failed", error=error)
+        await _show_bundles(
+            ctx, str(state["requester"]), state, note=f"{error}. Nothing was charged."
+        )
+        return
     await store.release_payment(str(state["payment_reference"]), error)
     state = await store.patch_workflow(
         str(state["workflow_id"]),
@@ -921,8 +1264,14 @@ async def _refund(ctx: Context, sender: str, state: dict[str, Any], *, automatic
         reference, "automatic refund" if automatic else "buyer requested a refund"
     ):
         if not automatic:
-            await ctx.send(
-                sender, cards.text_message("A refund is not available for this request.")
+            await _notice(
+                ctx,
+                sender,
+                "Refund not available",
+                "A refund is not available for this request.",
+                badge="Not available",
+                variant="warning",
+                buttons=[_status_button(str(state["workflow_id"]))],
             )
         return
     payment = await store.get_payment(reference)
@@ -943,7 +1292,7 @@ async def _refund(ctx: Context, sender: str, state: dict[str, Any], *, automatic
 
 
 STAGE_ROLES = {
-    **{key: key for key in SPECIALIST_CHAIN},
+    **{key: key for key in SPECIALISTS},
     "holds": "fulfillment",
     "booking": "fulfillment",
 }
@@ -955,7 +1304,7 @@ async def _recover_overdue(ctx: Context, state: dict[str, Any]) -> None:
         return
     requester = str(state["requester"])
     name = ROLE_BY_KEY[STAGE_ROLES.get(stage, "orchestrator")].name
-    if stage in SPECIALIST_CHAIN:
+    if stage in SPECIALISTS:
         retried = list(state.get("retried_stages", []))
         if stage not in retried:
             # Retry a lost or timed-out specialist task once, with a fresh request ID.
@@ -980,7 +1329,12 @@ async def _recover_overdue(ctx: Context, state: dict[str, Any]) -> None:
         error = f"The {name} did not answer in time, even after a retry"
         state = await store.patch_workflow(workflow_id, {"status": "failed", "error": error})
         await _audit(ctx, state, "specialist_timeout", role=stage)
-        await _send_card(ctx, requester, f"{error}. Nothing was charged.", cards.error_card(error))
+        await _send_card(
+            ctx,
+            requester,
+            f"{error}. Nothing was charged.",
+            cards.error_card(error, service=str(state.get("service") or "")),
+        )
         return
     if stage == "booking" or state.get("retrying"):
         # Release what we know is held; a seller that never got the commit stays uncommitted.
@@ -992,13 +1346,12 @@ async def _recover_overdue(ctx: Context, state: dict[str, Any]) -> None:
             workflow_id, {"status": "awaiting_selection", "stage": "selection"}
         )
         await _audit(ctx, state, "holds_timeout")
-        await ctx.send(
+        await _show_bundles(
+            ctx,
             requester,
-            cards.text_message(
-                f"The {name} did not answer. Nothing was charged; any holds expire on their own."
-            ),
+            state,
+            note=f"The {name} did not answer. Nothing was charged; any holds expire on their own.",
         )
-        await _show_bundles(ctx, requester, state)
 
 
 # ---------------------------------------------------------------------------
@@ -1017,13 +1370,45 @@ async def handle_task(ctx: Context, sender: str, task: TaskRequest) -> None:
     if ROLE.key == "fulfillment":
         await _start_checkout_round(ctx, task)
         return
-    if ROLE.key not in SPECIALIST_CHAIN:
+    if ROLE.key == "researcher":
+        await ctx.send(sender, await _research(task))
+        return
+    if ROLE.key == "verification" and task.payload.get("brief", {}).get("service") == "housing":
+        await ctx.send(sender, await _verify_housing(task))
+        return
+    if ROLE.key not in SPECIALISTS:
         return
     context: dict[str, Any] = {}
     if ROLE.key == "verification":
         seller_ids = [str(q.get("seller_id", "")) for q in task.payload.get("quotes", [])]
         context["seller_records"] = await store.seller_records(seller_ids)
     await ctx.send(sender, execute_specialist(ROLE.key, task, context))
+
+
+async def _research(task: TaskRequest) -> TaskResult:
+    """Campus Researcher: school, room system, and housing pages from the email domain."""
+    if task.target_role != "researcher" or utc_now() > parse(task.deadline_at):
+        return task_result(task, "researcher", ok=False, error="Task timed out; retrying")
+    try:
+        payload = await research(dict(task.payload), _http(), now=utc_now())
+    except (ProviderError, KeyError, ValueError) as exc:
+        return task_result(task, "researcher", ok=False, error=str(exc))
+    return task_result(task, "researcher", ok=True, payload=payload)
+
+
+async def _verify_housing(task: TaskRequest) -> TaskResult:
+    """Seller Verification's housing job: independently re-open every official link."""
+    payload = dict(task.payload)
+    housing = dict(payload.get("housing") or {})
+    domain = str(payload.get("school", {}).get("domain") or "")
+    dropped = []
+    for key in ("office_url", "portal_url"):
+        url = str(housing.get(key) or "")
+        if url and not await recheck_link(_http(), url, domain):
+            dropped.append(key.removesuffix("_url"))
+            housing[key] = ""
+    housing["unverified"] = dropped
+    return task_result(task, "verification", ok=True, payload={**payload, "housing": housing})
 
 
 @task_proto.on_message(model=TaskResult)
@@ -1047,11 +1432,34 @@ async def handle_task_result(ctx: Context, sender: str, result: TaskResult) -> N
     )
     if result.source_role == "intake" and result.ok:
         brief = dict(result.payload["brief"])
-        await _audit(
-            ctx, state, "preferences_seen", preferences={k: brief[k] for k in SAVED_PREFERENCES}
-        )
+        if brief.get("service") == "bundle":
+            await _audit(
+                ctx,
+                state,
+                "preferences_seen",
+                preferences={k: brief[k] for k in SAVED_PREFERENCES},
+            )
+    service = str(state.get("service") or "bundle")
     if next_task:
         await _dispatch(ctx, next_task)
+        if result.source_role == "researcher":
+            school = str(result.payload.get("school", {}).get("school_name") or "your school")
+            found = result.payload.get("rooms", {})
+            detail = (
+                f"Found {school}'s {found['system_label']} room system."
+                if found.get("status") == "found"
+                else f"Matched {school}."
+            )
+            await _send_card(
+                ctx,
+                result.requester,
+                f"{detail} {ROLE_BY_KEY[next_task.target_role].name} is next.",
+                cards.progress_card(next_task.workflow_id, next_task.target_role, _chain(state)),
+            )
+    elif state["status"] == "awaiting_link":
+        await _ask_for_link(ctx, result.requester, state)
+    elif state["status"] == "answered":
+        await _show_housing(ctx, result.requester, state)
     elif state["status"] == "awaiting_selection":
         await _show_bundles(ctx, result.requester, state)
     elif state["status"] == "failed":
@@ -1061,10 +1469,10 @@ async def handle_task_result(ctx: Context, sender: str, result: TaskResult) -> N
                 ctx,
                 result.requester,
                 f"I need a bit more detail. {error}.",
-                cards.request_form(upcoming_days(), note=error),
+                cards.service_form(service),
             )
         else:
-            await _send_card(ctx, result.requester, error, cards.error_card(error))
+            await _send_card(ctx, result.requester, error, cards.error_card(error, service=service))
 
 
 # ---------------------------------------------------------------------------
@@ -1112,8 +1520,12 @@ async def _start_discovery(ctx: Context, task: TaskRequest) -> None:
         window_start=str(brief["window_start"]),
         window_end=str(brief["window_end"]),
     )
+    # Only a live seller needs to know the school; catalog sellers never see it.
+    campus = {str(k): str(v) for k, v in dict(task.payload.get("campus") or {}).items()}
+    live = {listing.address for listing in listings if listing.live}
     for address in [*expected, *unlisted]:
-        await ctx.send(address, request)
+        message = request.copy(update={"campus": campus}) if address in live else request
+        await ctx.send(address, message)
     ctx.logger.info(
         "Workflow %s: asked %d listed and %d unlisted sellers for quotes",
         task.workflow_id,
@@ -1212,10 +1624,13 @@ async def _start_checkout_round(ctx: Context, task: TaskRequest) -> None:
         if phase == "hold":
             holds = hold_plan(task.request_id, dict(task.payload["bundle"]))
         elif phase == "commit":
-            payment = await store.get_payment(reference)
-            if payment is None or payment["status"] != "reserved":
-                raise ValueError("No reserved, verified payment for this booking")
             holds = {str(hold["hold_id"]): dict(hold) for hold in task.payload["holds"]}
+            if reference.startswith("free:"):
+                check_free_commit(task.workflow_id, reference, list(holds.values()))
+            else:
+                payment = await store.get_payment(reference)
+                if payment is None or payment["status"] != "reserved":
+                    raise ValueError("No reserved, verified payment for this booking")
         else:
             raise ValueError(f"Unknown checkout phase: {phase}")
     except (KeyError, ValueError) as exc:
@@ -1231,17 +1646,21 @@ async def _start_checkout_round(ctx: Context, task: TaskRequest) -> None:
         {"task": task.dict(), "phase": phase, "holds": holds},
     )
     brief = dict(task.payload.get("brief", {}))
+    campus = {str(k): str(v) for k, v in dict(task.payload.get("campus") or {}).items()}
     for hold in holds.values():
         message: HoldRequest | CommitHold
         if phase == "hold":
+            live = LISTING_BY_ID[str(hold["seller_id"])].live
             message = HoldRequest(
                 round_id=task.request_id,
                 workflow_id=task.workflow_id,
                 hold_id=hold["hold_id"],
                 item_id=hold["item_id"],
                 quantity=hold["quantity"],
-                window_start=str(brief["window_start"]),
-                window_end=str(brief["window_end"]),
+                # A live room is held for its own slot, not the whole search window.
+                window_start=str(hold.get("slot_start") or brief["window_start"]),
+                window_end=str(hold.get("slot_end") or brief["window_end"]),
+                campus=campus if live else {},
             )
         else:
             message = CommitHold(
@@ -1363,7 +1782,13 @@ async def _finish_checkout_round(ctx: Context, state: dict[str, Any], *, timed_o
             "fulfillment",
             ok=False,
             error=failure_message(phase, outcome["failed"]),
-            payload={"phase": phase, "failed_sellers": failed_ids},
+            payload={
+                "phase": phase,
+                "failed_sellers": failed_ids,
+                "failed_items": [
+                    f"{item['seller_id']}:{item['item_id']}" for item in outcome["failed"]
+                ],
+            },
         ),
     )
 

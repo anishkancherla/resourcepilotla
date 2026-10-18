@@ -5,19 +5,25 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
+from resourcepilot.cards import example_bundle_selection
 from resourcepilot.clock import CAMPUS_TZ
-from resourcepilot.intake import build_brief, parse_request_text
+from resourcepilot.intake import bundle_brief
 from resourcepilot.protocols import Quote, QuoteRequest
 from resourcepilot.registry import LISTINGS
 from resourcepilot.store import MemoryStore
 from sellers.inventory import build_offers
 
 NOW = datetime(2026, 10, 21, 10, 0, tzinfo=CAMPUS_TZ)
-EXAMPLE = "I need a DSLR, a podcast room, and 20 color posters Friday from 3-6 PM, under $35"
+# The demo-bundle form as a student submits it: DSLR, podcast room, 20 posters, Fri 3-6 PM, $35.
+EXAMPLE = {
+    key: value
+    for key, value in example_bundle_selection(NOW).items()
+    if key not in {"action", "service"}
+}
 
 
-def brief(text: str = EXAMPLE, **overrides: Any) -> dict[str, Any]:
-    return {**build_brief(parse_request_text(text, now=NOW), now=NOW), **overrides}
+def brief(fields: dict[str, Any] | None = None, **overrides: Any) -> dict[str, Any]:
+    return {**bundle_brief({**EXAMPLE, **(fields or {})}, now=NOW), **overrides}
 
 
 async def seller_quotes(

@@ -61,8 +61,11 @@ class CosmpyPayoutGateway:
 
 
 def seller_subtotals(bundle: dict[str, Any]) -> dict[str, int]:
+    """Priced lines only. A $0 Campus Rooms handoff is never part of the escrow."""
     subtotals: dict[str, int] = {}
     for line in bundle["lines"]:
+        if line.get("handoff"):
+            continue
         subtotals[line["seller_id"]] = subtotals.get(line["seller_id"], 0) + int(
             line["subtotal_cents"]
         )

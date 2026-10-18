@@ -10,6 +10,7 @@ from uuid import uuid4
 
 import pytest
 from network import USER
+from provider_fakes import SEARCH_DAY
 from uagents_core.contrib.protocols.chat import ChatMessage, MetadataContent, TextContent
 from uagents_core.contrib.protocols.payment import (
     CancelPayment,
@@ -18,10 +19,11 @@ from uagents_core.contrib.protocols.payment import (
     RequestPayment,
 )
 
-from resourcepilot.cards import EXAMPLE_REQUEST
+from resourcepilot.cards import example_bundle_selection
 from resourcepilot.checkout import hold_id_for, hold_plan, round_complete, round_outcome
 from resourcepilot.clock import later
 from resourcepilot.payment import TxEvidence, amount_to_atomic
+from resourcepilot.pricing import booking_fee_cents
 from resourcepilot.protocols import HoldConfirmed
 
 LINES = [
@@ -113,7 +115,7 @@ def mock_commit(request: RequestPayment, *, buyer: str = USER) -> CommitPayment:
 
 
 async def hold_first_bundle(network) -> None:
-    await network.send_user(chat(EXAMPLE_REQUEST))
+    await network.send_user(chat(example_bundle_selection()))
     _, carousel, _ = last_card(network, "carousel")
     await network.send_user(chat(carousel["items"][0]["primary_cta"]["selection"]))
     _, detail, _ = last_card(network, "detail")
@@ -133,6 +135,17 @@ async def request_payment(network, method: str) -> RequestPayment:
     )
     await network.send_user(chat(choice["action"]["selection"]))
     return payment_requests(network)[-1]
+
+
+def find_button(node: dict, label: str) -> dict:
+    if node.get("type") == "button" and node.get("label") == label:
+        return node
+    for child in node.get("children", []):
+        try:
+            return find_button(child, label)
+        except LookupError:
+            continue
+    raise LookupError(label)
 
 
 def terminal_flags(network) -> list[str]:
@@ -194,6 +207,37 @@ async def test_mock_stripe_checkout_books_every_seller_exactly_once(network) -> 
     _, bookings, _ = last_card(network, "detail")
     assert bookings["title"] == "Your recent bookings"
     assert bookings["summary_rows"][0]["label"] != "Bookings"
+
+
+async def test_free_study_room_rides_along_outside_escrow(network) -> None:
+    form = {**example_bundle_selection(), "room": "study_room", "email": "zq@purdue.edu"}
+    await network.send_user(chat(form))
+    _, carousel, _ = last_card(network, "carousel")
+    item = next(
+        entry
+        for entry in carousel["items"]
+        if "+ free study room" in [badge["label"] for badge in entry["badges"]]
+    )
+    await network.send_user(chat(item["primary_cta"]["selection"]))
+    _, detail, _ = last_card(network, "detail")
+    await network.send_user(chat(detail["ctas"][0]["selection"]))
+    bundle = workflow(network)["bundle"]
+    room = next(line for line in bundle["lines"] if line.get("handoff"))
+    assert (room["seller_id"], room["subtotal_cents"]) == ("campus_rooms", 0)
+    paid = sum(int(line["subtotal_cents"]) for line in bundle["lines"])
+    assert bundle["fee_cents"] == booking_fee_cents(paid)
+    assert bundle["total_cents"] == paid + bundle["fee_cents"]
+
+    request = await request_payment(network, "stripe_mock")
+    assert Decimal(request.accepted_funds[0].amount) * 100 == bundle["total_cents"]
+    await network.send_user(mock_commit(request))
+    assert workflow(network)["status"] == "booked"
+    payouts = [entry for entry in network.store.escrow.values() if entry["kind"] == "payout"]
+    assert "campus_rooms" not in {entry["party"] for entry in payouts}
+    assert {entry["party"] for entry in payouts} == sellers_in(bundle) - {"campus_rooms"}
+    _, receipt, _ = last_card(network, "detail")
+    assert any(row["label"] == "Book it yourself" for row in receipt["summary_rows"])
+    assert room["handoff_url"] in json.dumps(receipt)
 
 
 async def test_test_fet_is_verified_on_chain_before_booking(network, monkeypatch) -> None:
@@ -282,10 +326,9 @@ async def test_failed_commit_cancels_every_booking_and_pays_no_seller(network) -
 async def test_buyer_can_release_holds_before_paying(network) -> None:
     await hold_first_bundle(network)
     request = await request_payment(network, "stripe_mock")
-    _, options, _ = last_card(network, "custom")
-    release = next(
-        child for child in options["root"]["children"] if child.get("label") == "Release holds"
-    )
+    _, notice, _ = last_card(network, "custom")
+    assert notice["root"]["title"] == "Payment requested"
+    release = find_button(notice["root"], "Release holds")
     await network.send_user(chat(release["action"]["selection"]))
     assert {hold["status"] for hold in network.store.holds.values()} == {"released"}
     assert network.store.payments[request.reference]["status"] == "cancelled"
@@ -345,7 +388,7 @@ def load_demo_buyer() -> ModuleType:
 async def test_demo_buyer_script_clicks_through_the_real_cards(network, monkeypatch) -> None:
     monkeypatch.setenv("ORCHESTRATOR_ADDRESS", network.address("orchestrator"))
     demo = load_demo_buyer()
-    await network.send_user(chat(EXAMPLE_REQUEST))
+    await network.send_user(chat(example_bundle_selection()))
     while not payment_requests(network):
         kind, payload, _ = last_card(network)
         selection = demo.next_selection(kind, payload)
@@ -393,6 +436,32 @@ async def test_reroute_after_a_silent_seller_on_postgres(postgres_network) -> No
     state = await network.store.get_workflow(workflow_id)
     assert state["status"] == "awaiting_selection"
     assert all("westwood_print" not in sellers_in(bundle) for bundle in state["data"]["bundles"])
+
+
+async def test_free_room_checkout_on_postgres(postgres_network) -> None:
+    network = postgres_network
+    form = {
+        "action": "submit_form",
+        "service": "rooms",
+        "email": "zq@purdue.edu",
+        "day": SEARCH_DAY.isoformat(),
+        "window": "afternoon",
+        "duration": "60",
+    }
+    await network.send_user(chat(form))
+    _, carousel, _ = last_card(network, "carousel")
+    workflow_id = carousel["items"][0]["primary_cta"]["selection"]["workflow_id"]
+    await network.send_user(chat(carousel["items"][0]["primary_cta"]["selection"]))
+    _, detail, _ = last_card(network, "detail")
+    await network.send_user(chat(detail["ctas"][0]["selection"]))
+    _, review, _ = last_card(network, "review")
+    await network.send_user(chat(review["approve_cta"]["selection"]))
+    assert last_card(network, "detail")[1]["title"] == "Your booking link"
+    state = await network.store.get_workflow(workflow_id)
+    assert state["status"] == "booked"
+    assert await network.store.get_payment(f"free:{workflow_id}") is None
+    for hold in state["holds"]:
+        assert (await network.store.get_hold(hold["hold_id"]))["status"] == "committed"
 
 
 def sellers_in(bundle: dict) -> set[str]:

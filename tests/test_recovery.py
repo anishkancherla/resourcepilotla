@@ -14,7 +14,7 @@ from test_checkout import (
     workflow,
 )
 
-from resourcepilot.cards import EXAMPLE_REQUEST
+from resourcepilot.cards import example_bundle_selection
 from resourcepilot.clock import later
 from resourcepilot.models import TaskResult
 
@@ -110,7 +110,7 @@ async def test_failed_booking_is_refunded_automatically_after_the_retry_window(n
 
 async def test_a_lost_specialist_task_is_retried_once(network) -> None:
     network.set_offline("analysis")
-    await network.send_user(chat(EXAMPLE_REQUEST))
+    await network.send_user(chat(example_bundle_selection()))
     assert workflow(network)["stage"] == "analysis"
     network.set_offline("analysis", False)
     await network.advance(31)
@@ -121,7 +121,7 @@ async def test_a_lost_specialist_task_is_retried_once(network) -> None:
 
 async def test_a_specialist_that_stays_down_fails_cleanly(network) -> None:
     network.set_offline("analysis")
-    await network.send_user(chat(EXAMPLE_REQUEST))
+    await network.send_user(chat(example_bundle_selection()))
     await network.advance(31)
     await network.advance(31)
     state = workflow(network)
@@ -143,7 +143,7 @@ async def test_checkout_coordinator_outage_during_booking_keeps_the_payment(netw
 
 
 async def test_late_success_after_the_workflow_moved_on_is_released(network) -> None:
-    await network.send_user(chat(EXAMPLE_REQUEST))
+    await network.send_user(chat(example_bundle_selection()))
     state = workflow(network)
     orphan = {
         "hold_id": "orphan-hold",

@@ -30,7 +30,7 @@ services:
       timeout: 3s
       retries: 20
 
-  # Eight ResourcePilot platform agents.
+  # Nine ResourcePilot platform agents.
   orchestrator:
     <<: *agent
     environment:
@@ -95,7 +95,15 @@ services:
       AGENT_PORT: ${MEMORY_AUDIT_PORT}
     ports: ["127.0.0.1:${MEMORY_AUDIT_PORT}:18000"]
 
-  # Five independent demo seller agents.
+  researcher:
+    <<: *agent
+    environment:
+      AGENT_MODULE: agents.run
+      AGENT_ROLE: researcher
+      AGENT_PORT: ${RESEARCHER_PORT}
+    ports: ["127.0.0.1:${RESEARCHER_PORT}:18000"]
+
+  # Five independent demo seller agents, then the live Campus Rooms seller.
   westwood-print:
     <<: *agent
     environment:
@@ -135,6 +143,14 @@ services:
       SELLER_ID: studio_rooms
       AGENT_PORT: ${STUDIO_ROOMS_PORT}
     ports: ["127.0.0.1:${STUDIO_ROOMS_PORT}:18000"]
+
+  campus-rooms:
+    <<: *agent
+    environment:
+      AGENT_MODULE: sellers.run
+      SELLER_ID: campus_rooms
+      AGENT_PORT: ${CAMPUS_ROOMS_PORT}
+    ports: ["127.0.0.1:${CAMPUS_ROOMS_PORT}:18000"]
 
 volumes:
   postgres-data:

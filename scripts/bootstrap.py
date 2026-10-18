@@ -6,11 +6,13 @@ import json
 import os
 import secrets
 from pathlib import Path
+from typing import Any
 from urllib.parse import quote
 
+from dotenv import dotenv_values
 from uagents import Agent
 
-from resourcepilot.config import ALL_AGENTS
+from resourcepilot.config import ALL_AGENTS, AgentIdentity
 
 ROOT = Path(__file__).resolve().parents[1]
 TEMPLATE = ROOT / ".env.example"
@@ -32,9 +34,60 @@ def replace_value(lines: list[str], key: str, value: str) -> None:
     lines.append(f"{key}={value}")
 
 
-def confirm_overwrite() -> bool:
-    response = input(".env already exists. Replace it and generate new identities? [y/N] ")
-    return response.strip().lower() in {"y", "yes"}
+def confirm(question: str) -> bool:
+    return input(f"{question} [y/N] ").strip().lower() in {"y", "yes"}
+
+
+def assign(lines: list[str], identity: AgentIdentity) -> None:
+    """Give one agent a fresh private seed and the address and wallet derived from it."""
+    seed = secrets.token_urlsafe(48)
+    address, wallet = derive_identity(identity.key, seed)
+    replace_value(lines, identity.seed_env, seed)
+    replace_value(lines, identity.address_env, address)
+    if identity.kind == "seller":
+        replace_value(lines, identity.wallet_env, wallet)
+
+
+def profile(identity: AgentIdentity, address: str, port: int) -> dict[str, Any]:
+    inspector = (
+        "https://agentverse.ai/inspect/?uri="
+        f"{quote(f'http://127.0.0.1:{port}', safe='/')}&address={address}"
+    )
+    return {
+        "key": identity.key,
+        "kind": identity.kind,
+        "name": identity.name,
+        "address": address,
+        "port": port,
+        "inspector_url": inspector,
+        "profile_url": f"https://agentverse.ai/agents/details/{address}/profile",
+    }
+
+
+def missing_identities(values: dict[str, str | None]) -> list[AgentIdentity]:
+    return [identity for identity in ALL_AGENTS if not (values.get(identity.seed_env) or "")]
+
+
+def add_missing() -> list[AgentIdentity] | None:
+    """Append identities for agents added since .env was made. Existing seeds never change."""
+    missing = missing_identities(dotenv_values(ENV_FILE))
+    if not missing:
+        print("Every agent already has an identity. Nothing was changed.")
+        return []
+    names = ", ".join(identity.name for identity in missing)
+    if not confirm(f"Add identities for {len(missing)} new agents ({names})? Others stay as is."):
+        print("Kept the existing .env. Nothing was changed.")
+        return None
+    lines = ENV_FILE.read_text().splitlines()
+    present = {line.split("=", 1)[0] for line in lines if "=" in line}
+    for line in TEMPLATE.read_text().splitlines():
+        if "=" in line and not line.startswith("#") and line.split("=", 1)[0] not in present:
+            lines.append(line)
+    for identity in missing:
+        assign(lines, identity)
+    ENV_FILE.write_text("\n".join(lines) + "\n")
+    os.chmod(ENV_FILE, 0o600)
+    return missing
 
 
 def main() -> int:
@@ -44,41 +97,41 @@ def main() -> int:
         action="store_true",
         help="Replace an existing .env (explicit opt-in; identities will change)",
     )
+    parser.add_argument(
+        "--add-missing",
+        action="store_true",
+        help="Keep every existing identity and only add agents that have none yet",
+    )
     args = parser.parse_args()
-    if ENV_FILE.exists() and not args.force and not confirm_overwrite():
-        print("Kept the existing .env. Nothing was overwritten.")
-        return 0
+    if ENV_FILE.exists() and args.add_missing:
+        added = add_missing()
+        if added is None:
+            return 0
+        print(f"\nAdded {len(added)} identities (seeds are not displayed).")
+    else:
+        if ENV_FILE.exists() and not args.force:
+            if missing_identities(dotenv_values(ENV_FILE)):
+                print("Your .env predates some agents; `make bootstrap-missing` adds only those.")
+            if not confirm(".env already exists. Replace it and generate new identities?"):
+                print("Kept the existing .env. Nothing was overwritten.")
+                return 0
+        lines = TEMPLATE.read_text().splitlines()
+        for identity in ALL_AGENTS:
+            assign(lines, identity)
+        ENV_FILE.write_text("\n".join(lines) + "\n")
+        os.chmod(ENV_FILE, 0o600)
+        print(f"\nCreated .env with {len(ALL_AGENTS)} private random seeds (seeds not displayed).")
 
-    lines = TEMPLATE.read_text().splitlines()
-    profiles = []
-    for identity in ALL_AGENTS:
-        seed = secrets.token_urlsafe(48)
-        address, wallet = derive_identity(identity.key, seed)
-        replace_value(lines, identity.seed_env, seed)
-        replace_value(lines, identity.address_env, address)
-        if identity.kind == "seller":
-            replace_value(lines, identity.wallet_env, wallet)
-        inspector = (
-            "https://agentverse.ai/inspect/?uri="
-            f"{quote(f'http://127.0.0.1:{identity.port}', safe='/')}&address={address}"
+    values = dotenv_values(ENV_FILE)
+    profiles = [
+        profile(
+            identity,
+            str(values.get(identity.address_env) or ""),
+            int(values.get(identity.port_env) or identity.port),
         )
-        profiles.append(
-            {
-                "key": identity.key,
-                "kind": identity.kind,
-                "name": identity.name,
-                "address": address,
-                "port": identity.port,
-                "inspector_url": inspector,
-                "profile_url": f"https://agentverse.ai/agents/details/{address}/profile",
-            }
-        )
-
-    ENV_FILE.write_text("\n".join(lines) + "\n")
-    os.chmod(ENV_FILE, 0o600)
+        for identity in ALL_AGENTS
+    ]
     MANIFEST.write_text(json.dumps({"agents": profiles}, indent=2) + "\n")
-
-    print(f"\nCreated .env with {len(profiles)} private random seeds (seeds are not displayed).")
     print("Keep .env stable and private: changing a seed changes that agent's identity.\n")
     for item in profiles:
         print(f"{item['name']}")

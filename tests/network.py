@@ -21,6 +21,7 @@ from pathlib import Path
 from types import ModuleType
 from typing import Any
 
+from provider_fakes import fake_http
 from uagents import Agent, Model
 from uagents_core.contrib.protocols.chat import ChatAcknowledgement, ChatMessage
 
@@ -121,6 +122,12 @@ class AgentNetwork:
             await handler(FakeContext(self, destination, session), sender, message)
         raise RuntimeError("message loop did not settle")
 
+    def use_http(self, **options: Any) -> None:
+        """Serve every live source from the offline fakes, e.g. ``booked={"101@14:00"}``."""
+        for module in self.modules.values():
+            if hasattr(module, "HTTP"):
+                module.HTTP = fake_http(self.store, **options)
+
     def set_offline(self, key: str, offline: bool = True) -> None:
         """Simulate an agent that is down: messages to it are lost and its sweep does not run."""
         (self.offline.add if offline else self.offline.discard)(self.address(key))
@@ -213,6 +220,8 @@ def agent_network(
         monkeypatch.setattr(module, "store", network.store)
         monkeypatch.setattr(module, "READY", True)
         monkeypatch.setattr(module, "utc_now", shifted_now)
+        if hasattr(module, "HTTP"):
+            monkeypatch.setattr(module, "HTTP", fake_http(network.store))
         network.by_key[key] = module
         network.modules[str(module.agent.address)] = module
     yield network

@@ -14,6 +14,12 @@ if not env_path.exists():
 
 values = dotenv_values(env_path)
 count = len(ALL_AGENTS)
+missing = [agent.name for agent in ALL_AGENTS if not values.get(agent.seed_env)]
+if missing:
+    raise SystemExit(
+        f"No identity yet for {', '.join(missing)}. Run `make bootstrap-missing`; "
+        "it keeps every existing identity."
+    )
 seeds = [str(values.get(agent.seed_env) or "") for agent in ALL_AGENTS]
 addresses = [str(values.get(agent.address_env) or "") for agent in ALL_AGENTS]
 ports = [str(values.get(agent.port_env) or "") for agent in ALL_AGENTS]

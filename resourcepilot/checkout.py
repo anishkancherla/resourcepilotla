@@ -3,6 +3,10 @@
 A round asks every seller in a bundle to do one thing (hold, or commit a hold). It succeeds only
 if every seller confirms. One rejection ends the round early; silence ends it at the deadline.
 Either way every hold in the round is released, so a partial bundle is never left behind.
+
+A Campus Rooms line is a $0 handoff: its "hold" is a live re-check of the slot, its "commit"
+hands over the school's booking link, and no payment ever covers it. A bundle made only of
+handoff lines therefore commits with a ``free:<workflow_id>`` reference instead of a payment.
 """
 
 from __future__ import annotations
@@ -35,8 +39,32 @@ def hold_plan(request_id: str, bundle: dict[str, Any]) -> dict[str, dict[str, An
             "item_id": str(line["item_id"]),
             "quantity": int(line["quantity"]),
             "subtotal_cents": int(line["subtotal_cents"]),
+            "handoff": bool(line.get("handoff")),
+            "slot_start": str(line.get("slot_start") or ""),
+            "slot_end": str(line.get("slot_end") or ""),
         }
     return plan
+
+
+def free_reference(workflow_id: str) -> str:
+    return f"free:{workflow_id}"
+
+
+def is_free_bundle(bundle: dict[str, Any]) -> bool:
+    lines = bundle.get("lines") or []
+    return bool(lines) and all(
+        line.get("handoff") and int(line["subtotal_cents"]) == 0 for line in lines
+    )
+
+
+def check_free_commit(workflow_id: str, reference: str, holds: list[dict[str, Any]]) -> None:
+    """A free commit may only hand over $0 links from live sellers, never book a priced item."""
+    if reference != free_reference(workflow_id):
+        raise ValueError("Free commit reference does not match this workflow")
+    for hold in holds:
+        listing = LISTING_BY_ID.get(str(hold.get("seller_id")))
+        if listing is None or not listing.live or int(hold.get("subtotal_cents", 1)) != 0:
+            raise ValueError("A free commit may include only $0 Campus Rooms handoffs")
 
 
 def round_complete(state: dict[str, Any]) -> bool:

@@ -12,10 +12,12 @@ Capture real evidence for each item. Do not claim an item until you have it.
 
 ## Multi-agent collaboration
 
-- [ ] 13 stable addresses and profiles: eight platform agents and five sellers.
+- [ ] 15 stable addresses and profiles: nine platform agents and six sellers.
 - [ ] Each profile has a role README, a Chat manifest, and a working status-card chat.
-- [ ] The audit timeline shows one workflow ID across Intake, Discovery, Verification, Analysis,
-      Planner, the Checkout Coordinator, and Memory and Audit.
+- [ ] The audit timeline shows one workflow ID across Intake, the Campus Researcher, Discovery,
+      Verification, Analysis, Planner, the Checkout Coordinator, and Memory and Audit.
+- [ ] A study-room request shows the Researcher's finding (the school and its booking system) and
+      a quote from the separate Campus Rooms seller agent.
 - [ ] `make logs` shows real `ResourceHold` quote, hold, and commit messages being handled by
       separate seller containers.
 
@@ -30,8 +32,10 @@ Capture real evidence for each item. Do not claim an item until you have it.
 
 ## Interactive cards
 
-- [ ] Welcome, form, progress, carousel, detail, vetting, review, payment, receipt, recovery, and
-      refund cards all render.
+- [ ] Services menu, the three forms, progress, room and bundle carousels, detail, vetting,
+      review, payment, receipt, housing, paste-link, recovery, and refund cards all render.
+- [ ] Every reply is a card: free text gets the services menu. `scripts/print_cards.py` validates
+      every payload against the documented card fields.
 - [ ] Card selections carry stable workflow and bundle IDs. A prose request for a payment or a hold
       is never acted on.
 
@@ -45,9 +49,14 @@ Capture real evidence for each item. Do not claim an item until you have it.
 
 ## Real-time data
 
-- [ ] Quotes are generated live by each seller agent from its own inventory and existing holds.
-      Capacity changes as holds are placed.
-- [ ] Be honest: the catalogs are demo data, not real stores.
+- [ ] Study rooms are real open rooms read live from the school's LibCal, and each one is
+      re-checked before the booking link is shown.
+- [ ] Housing facts come from IPEDS, and the office and portal links come from the school's own
+      site.
+- [ ] Demo-bundle quotes are generated live by each seller agent from its own inventory and
+      existing holds. Capacity changes as holds are placed.
+- [ ] Be honest: the demo catalogs are not real stores, IPEDS facts are the 2022 survey year, and
+      ResourcePilot does not reserve rooms or apply for housing.
 
 ## Keeps operating after the event
 

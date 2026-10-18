@@ -2,7 +2,9 @@
 
 The Orchestrator owns workflow state. Each specialist receives a correlated TaskRequest, does
 one job, and returns a TaskResult that echoes the correlation fields. A late or duplicate result
-can never advance a newer stage.
+can never advance a newer stage. Each campus service has its own chain of specialists
+(``SERVICE_CHAINS``); the Campus Researcher, Discovery, and the Checkout Coordinator run their
+network work asynchronously in the agent runtime rather than through ``HANDLERS``.
 """
 
 from __future__ import annotations
@@ -14,7 +16,7 @@ from uuid import uuid4
 
 from resourcepilot.bundles import planner_handler
 from resourcepilot.clock import later, parse, utc_now
-from resourcepilot.config import SPECIALIST_CHAIN, env_int
+from resourcepilot.config import env_int, service_chain
 from resourcepilot.intake import intake_handler
 from resourcepilot.logistics import analysis_handler
 from resourcepilot.models import TaskRequest, TaskResult
@@ -89,6 +91,7 @@ async def begin_workflow(
     request: dict[str, Any],
 ) -> TaskRequest:
     workflow_id = str(uuid4())
+    service = str(request.get("service") or "bundle")
     task = make_task(
         workflow_id=workflow_id,
         requester=requester,
@@ -102,6 +105,7 @@ async def begin_workflow(
             "workflow_id": workflow_id,
             "requester": requester,
             "session_id": session_id,
+            "service": service,
             "stage": "intake",
             "status": "running",
             "expected_request_id": task.request_id,
@@ -131,28 +135,59 @@ async def accept_result(
             result.workflow_id,
             {"status": "failed", "error": result.error or "Specialist failed"},
         )
-    index = SPECIALIST_CHAIN.index(result.source_role)
-    if index == len(SPECIALIST_CHAIN) - 1:
+    service = str(state.get("service") or "bundle")
+    if result.source_role == "researcher" and result.payload.get("needs_link"):
+        # No booking system was found: pause until the student pastes the link (or skips it).
         return None, await store.patch_workflow(
             result.workflow_id,
-            {"status": "awaiting_selection", "stage": "selection", "data": result.payload},
+            {"status": "awaiting_link", "stage": "link", "data": result.payload},
         )
-    next_role = SPECIALIST_CHAIN[index + 1]
-    task = make_task(
+    chain = service_chain(service, result.payload)
+    index = chain.index(result.source_role)
+    if index == len(chain) - 1:
+        done = (
+            {"status": "answered", "stage": "complete"}
+            if service == "housing"
+            else {"status": "awaiting_selection", "stage": "selection"}
+        )
+        return None, await store.patch_workflow(
+            result.workflow_id, {**done, "data": result.payload}
+        )
+    return await advance_to(
+        store,
         workflow_id=result.workflow_id,
         requester=result.requester,
         session_id=result.session_id,
-        target_role=next_role,
+        next_role=chain[index + 1],
         payload=result.payload,
     )
+
+
+async def advance_to(
+    store: DurableStore,
+    *,
+    workflow_id: str,
+    requester: str,
+    session_id: str,
+    next_role: str,
+    payload: dict[str, Any],
+) -> tuple[TaskRequest, dict[str, Any]]:
+    """Hand the workflow to ``next_role`` with a fresh, correlated task."""
+    task = make_task(
+        workflow_id=workflow_id,
+        requester=requester,
+        session_id=session_id,
+        target_role=next_role,
+        payload=payload,
+    )
     state = await store.patch_workflow(
-        result.workflow_id,
+        workflow_id,
         {
             "stage": next_role,
             "status": "running",
             "expected_request_id": task.request_id,
             "deadline_at": task.deadline_at,
-            "data": result.payload,
+            "data": payload,
         },
     )
     return task, state

@@ -82,3 +82,24 @@ def test_mock_stripe_is_named_and_documented_as_moving_no_money() -> None:
         if {".venv", "tests"} & set(path.relative_to(ROOT).parts):
             continue
         assert "import stripe" not in path.read_text(), path
+
+
+def test_fifteen_real_agents_and_only_live_roles_fetch_the_web() -> None:
+    assert len(ALL_AGENTS) == 15
+    assert {"researcher", "campus_rooms"} <= {identity.key for identity in ALL_AGENTS}
+    importers = sorted(
+        str(path.relative_to(ROOT))
+        for path in (*ROOT.glob("agents/*.py"), *ROOT.glob("sellers/*.py"))
+        if "resourcepilot.http" in path.read_text()
+    )
+    # agents/run.py hosts the Researcher and Verification's link re-checks; sellers/run.py
+    # serves Campus Rooms. No demo seller reads the web.
+    assert importers == ["agents/run.py", "sellers/live_rooms.py", "sellers/run.py"]
+    assert "httpx" not in (ROOT / "sellers" / "inventory.py").read_text()
+
+
+def test_campus_rooms_never_holds_money() -> None:
+    live = (ROOT / "sellers" / "live_rooms.py").read_text()
+    assert "subtotal_cents=0" in live
+    assert '"unit_price_cents": 0' in live
+    assert "payment_protocol_spec" not in live

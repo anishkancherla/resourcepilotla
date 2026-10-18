@@ -92,7 +92,7 @@ async def test_full_pipeline_through_correlated_results(registry_env) -> None:
         store,
         requester="agent1qbuyer",
         session_id="s",
-        request={"text": EXAMPLE, "now": NOW.isoformat()},
+        request={"service": "bundle", "fields": EXAMPLE, "now": NOW.isoformat()},
     )
     visited = []
     state: dict = {}

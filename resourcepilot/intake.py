@@ -1,20 +1,22 @@
-"""Turn a sentence or a submitted form into a validated booking brief.
+"""Turn a submitted form into a validated brief for one campus service.
 
-The parser is deterministic and bounded on purpose: it extracts only the fields ResourcePilot
-can act on and reports what is missing, so the Orchestrator can ask with a form instead of
-guessing.
+ResourcePilot takes requests only from cards and forms, never free text. Every brief is bounded
+and deterministic, and missing fields are reported so the Orchestrator can show the form again.
+A school email is reduced to its domain before the request is stored; the part before ``@`` is
+never kept, logged, or sent to another agent.
 """
 
 from __future__ import annotations
 
-import re
 from datetime import date, datetime, time, timedelta
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from resourcepilot.clock import CAMPUS_TZ, parse, utc_now
 from resourcepilot.registry import CATEGORIES
+from resourcepilot.research import WINDOWS, school_domain
 
-WEEKDAYS = ("monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday")
+SERVICES = ("rooms", "housing", "bundle")
 PRIORITIES = {"cheapest": "Lowest price", "closest": "Shortest walk", "best_rated": "Best rated"}
 ANCHORS: dict[str, tuple[str, float, float]] = {
     "student_union": ("Student union", 34.0705, -118.4445),
@@ -22,125 +24,44 @@ ANCHORS: dict[str, tuple[str, float, float]] = {
     "north_dorms": ("North dorms", 34.0729, -118.4520),
 }
 CAMERA_TYPES = ("any", "dslr", "mirrorless")
+ROOM_DURATIONS = {"30": "30 minutes", "60": "1 hour", "90": "90 minutes", "120": "2 hours"}
+MAX_GROUP = 12
 MAX_POSTERS = 500
 MAX_HOURS = 8
 MAX_BUDGET_CENTS = 50_000
 MAX_DAYS_AHEAD = 14
 REQUIRED = ("items", "day", "start", "end", "budget_cents")
-
-_TIME = r"(\d{1,2})(?::(\d{2}))?\s*(am|pm|a\.m\.|p\.m\.)?"
-# Hyphen, en dash, or em dash between the two times.
-_RANGE = re.compile(_TIME + "\\s*(?:-|\u2013|\u2014|to|until|till)\\s*" + _TIME, re.IGNORECASE)
-_BUDGET = re.compile(
-    r"(?:under|below|less than|max(?:imum)?|budget(?: of| is)?|up to|at most)\s*\$?\s*"
-    r"(\d+(?:\.\d{1,2})?)",
-    re.IGNORECASE,
-)
-_DOLLARS = re.compile(r"\$\s*(\d+(?:\.\d{1,2})?)")
-_POSTERS = re.compile(r"(\d+)\s*(?:color\s+|colour\s+)?(?:posters?|prints?|flyers?)", re.I)
+EMAIL_FIELDS = ("email", "school_email")
 
 
 def _local_today(now: datetime) -> date:
     return now.astimezone(CAMPUS_TZ).date()
 
 
-def _hour(raw_hour: str, raw_minute: str | None, meridiem: str | None) -> tuple[int, int]:
-    hour, minute = int(raw_hour), int(raw_minute or 0)
-    marker = (meridiem or "").replace(".", "").lower()
-    if marker == "pm" and hour < 12:
-        hour += 12
-    if marker == "am" and hour == 12:
-        hour = 0
-    return hour, minute
+def scrub_fields(fields: dict[str, Any]) -> dict[str, Any]:
+    """Replace any email field with its school domain before the request is stored anywhere."""
+    clean = {key: value for key, value in fields.items() if key not in EMAIL_FIELDS}
+    raw = next((str(fields[key]) for key in EMAIL_FIELDS if fields.get(key)), "")
+    if raw:
+        try:
+            clean["school_domain"] = school_domain(raw)
+        except ValueError:
+            clean["school_domain"] = ""
+            clean["email_invalid"] = True
+    return clean
 
 
-def _window_from_match(match: re.Match[str]) -> tuple[time, time] | None:
-    sh, sm, smer, eh, em, emer = match.groups()
-    if not smer and emer:
-        # "3-6 PM" means both ends are PM unless that would put the start after the end.
-        start_pm = _hour(sh, sm, emer)
-        smer = emer if start_pm[0] < _hour(eh, em, emer)[0] else None
-    start_hour, start_minute = _hour(sh, sm, smer)
-    end_hour, end_minute = _hour(eh, em, emer)
-    if not smer and not emer and start_hour < 8:
-        # Bare "3-6" during the day almost always means the afternoon.
-        start_hour, end_hour = start_hour + 12, end_hour + 12
-    if not (0 <= start_hour < 24 and 0 <= end_hour < 24 and start_minute < 60 > end_minute):
-        return None
-    return time(start_hour, start_minute), time(end_hour, end_minute)
-
-
-def _parse_window(text: str) -> tuple[time, time] | None:
-    # Skip ISO dates such as 2026-10-23 so their digits are not read as a time range.
-    cleaned = re.sub(r"\b20\d\d-\d\d-\d\d\b", " ", text)
-    for match in _RANGE.finditer(cleaned):
-        if window := _window_from_match(match):
-            return window
-    return None
-
-
-def _parse_day(text: str, today: date) -> date | None:
-    lowered = text.lower()
-    if "tomorrow" in lowered:
-        return today + timedelta(days=1)
-    if "today" in lowered or "tonight" in lowered:
-        return today
-    for index, name in enumerate(WEEKDAYS):
-        if re.search(rf"\b{name}\b|\b{name[:3]}\b", lowered):
-            return today + timedelta(days=(index - today.weekday()) % 7)
-    match = re.search(r"\b(20\d\d-\d\d-\d\d)\b", lowered)
-    return date.fromisoformat(match.group(1)) if match else None
-
-
-def parse_request_text(text: str, *, now: datetime | None = None) -> dict[str, Any]:
-    """Extract a partial request from free text; missing fields are simply absent."""
-    lowered = f" {text.lower()} "
-    current = now or utc_now()
-    found: dict[str, Any] = {"items": {}, "camera_type": "any", "notes": text.strip()[:300]}
-    items: dict[str, int] = found["items"]
-    if "dslr" in lowered:
-        items["camera"], found["camera_type"] = 1, "dslr"
-    elif "mirrorless" in lowered:
-        items["camera"], found["camera_type"] = 1, "mirrorless"
-    elif re.search(r"\bcamera\b", lowered):
-        items["camera"] = 1
-    if re.search(r"\bmic(rophone)?s?\b", lowered):
-        items["microphone"] = 1
-    if "tripod" in lowered:
-        items["tripod"] = 1
-    if re.search(r"podcast\s*(room|studio|booth)?|recording (room|studio)", lowered):
-        items["podcast_room"] = 1
-    elif re.search(r"study\s*room|meeting room", lowered):
-        items["study_room"] = 1
-    if poster := _POSTERS.search(lowered):
-        items["posters"] = int(poster.group(1))
-    elif re.search(r"\bposters?\b", lowered):
-        items["posters"] = 0
-
-    if budget := (_BUDGET.search(lowered) or _DOLLARS.search(lowered)):
-        found["budget_cents"] = round(float(budget.group(1)) * 100)
-    if day := _parse_day(lowered, _local_today(current)):
-        found["day"] = day.isoformat()
-    if window := _parse_window(lowered):
-        found["start"], found["end"] = window[0].strftime("%H:%M"), window[1].strftime("%H:%M")
-    if re.search(r"\b(trained|have training|completed training|training done)\b", lowered):
-        found["has_training"] = True
-    if re.search(r"cheap|lowest price|save money", lowered):
-        found["priority"] = "cheapest"
-    elif re.search(r"closest|nearby|short walk|near me", lowered):
-        found["priority"] = "closest"
-    elif re.search(r"best rated|highest rated|best quality", lowered):
-        found["priority"] = "best_rated"
-    for key, (label, _, _) in ANCHORS.items():
-        if label.split()[-1].lower().rstrip("s") in lowered:
-            found["anchor"] = key
-    if not items:
-        found.pop("items")
-    return found
+def _require_domain(fields: dict[str, Any], purpose: str) -> str:
+    if fields.get("email_invalid"):
+        raise ValueError("Missing: a valid school email, for example you@purdue.edu")
+    domain = str(fields.get("school_domain") or "").strip().lower()
+    if not domain:
+        raise ValueError(f"Missing: your school email {purpose}")
+    return school_domain(domain)
 
 
 def from_form(fields: dict[str, Any]) -> dict[str, Any]:
-    """Map captured form fields onto the same partial request shape as free text."""
+    """Map captured demo-bundle form fields onto a partial request for ``build_brief``."""
     items: dict[str, int] = {}
     camera = str(fields.get("camera", "none"))
     if camera in CAMERA_TYPES:
@@ -242,23 +163,84 @@ def build_brief(request: dict[str, Any], *, now: datetime | None = None) -> dict
 SAVED_PREFERENCES = ("priority", "anchor", "has_training")
 
 
+def room_brief(fields: dict[str, Any], *, now: datetime | None = None) -> dict[str, Any]:
+    """A study-room search at the student's own school. The Researcher sets the exact window."""
+    current = now or utc_now()
+    domain = _require_domain(fields, "so the Researcher can find your library")
+    try:
+        day = date.fromisoformat(str(fields.get("day", "")))
+    except ValueError:
+        raise ValueError("Missing: a day from the list") from None
+    today = _local_today(current)
+    if not today - timedelta(days=1) <= day <= today + timedelta(days=MAX_DAYS_AHEAD - 1):
+        raise ValueError(f"Pick a day within the next {MAX_DAYS_AHEAD} days")
+    window = str(fields.get("window") or "afternoon")
+    duration = str(fields.get("duration") or "60")
+    if window not in WINDOWS or duration not in ROOM_DURATIONS:
+        raise ValueError("Missing: a time of day and a duration")
+    group = _int(fields.get("group_size") or 1)
+    if group is None or not 1 <= group <= MAX_GROUP:
+        raise ValueError(f"People must be between 1 and {MAX_GROUP}")
+    return {
+        "service": "rooms",
+        "school_domain": domain,
+        "items": {"study_room": 1},
+        "day": day.isoformat(),
+        "window": window,
+        "duration_minutes": int(duration),
+        "hours": round(int(duration) / 60, 2),
+        "group_size": group,
+        "budget_cents": 0,
+        "priority": "earliest",
+        "camera_type": "any",
+        "has_training": False,
+        "notes": "",
+    }
+
+
+def housing_brief(fields: dict[str, Any]) -> dict[str, Any]:
+    domain = _require_domain(fields, "so the Researcher can find your housing office")
+    return {"service": "housing", "school_domain": domain, "items": {}}
+
+
+def bundle_brief(fields: dict[str, Any], *, now: datetime | None = None) -> dict[str, Any]:
+    """The labeled demo bundle, plus an optional free study room at the student's own school."""
+    brief = build_brief(from_form(fields), now=now)
+    brief["service"] = "bundle"
+    if "study_room" in brief["items"]:
+        brief["school_domain"] = _require_domain(fields, "to add a free study room")
+        group = _int(fields.get("group_size") or 1)
+        brief["group_size"] = group if group and 1 <= group <= MAX_GROUP else 1
+    return brief
+
+
 def intake_handler(payload: dict[str, Any]) -> dict[str, Any]:
     now = parse(str(payload["now"])) if payload.get("now") else None
-    if isinstance(payload.get("fields"), dict):
-        request = from_form(dict(payload["fields"]))
-    else:
-        request = parse_request_text(str(payload.get("text", "")), now=now)
-        # A sentence rarely restates preferences, so fall back to the saved ones.
-        saved = dict(payload.get("saved_preferences") or {})
-        for key in SAVED_PREFERENCES:
-            if key not in request and key in saved:
-                request[key] = saved[key]
-    return {"brief": build_brief(request, now=now)}
+    fields = dict(payload.get("fields") or {})
+    service = str(payload.get("service") or fields.get("service") or "bundle")
+    if service == "rooms":
+        return {"brief": room_brief(fields, now=now)}
+    if service == "housing":
+        return {"brief": housing_brief(fields)}
+    if service != "bundle":
+        raise ValueError(f"Unknown service: {service}")
+    # A form left on its defaults falls back to the student's saved bundle preferences.
+    saved = dict(payload.get("saved_preferences") or {})
+    for key in SAVED_PREFERENCES:
+        if fields.get(key) in (None, "") and key in saved:
+            fields[key] = saved[key]
+    return {"brief": bundle_brief(fields, now=now)}
+
+
+def brief_zone(brief: dict[str, Any]) -> ZoneInfo:
+    """Rooms use the school's own timezone; the demo bundle uses the demo shops' campus."""
+    return ZoneInfo(str(brief.get("timezone") or "America/Los_Angeles"))
 
 
 def describe_window(brief: dict[str, Any]) -> str:
-    start = parse(str(brief["window_start"])).astimezone(CAMPUS_TZ)
-    end = parse(str(brief["window_end"])).astimezone(CAMPUS_TZ)
+    zone = brief_zone(brief)
+    start = parse(str(brief["window_start"])).astimezone(zone)
+    end = parse(str(brief["window_end"])).astimezone(zone)
     return f"{start:%a %b %-d}, {start:%-I:%M %p}-{end:%-I:%M %p}".replace(":00", "")
 
 

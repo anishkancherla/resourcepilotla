@@ -65,19 +65,19 @@ PLATFORM_ROLES: Final[tuple[AgentIdentity, ...]] = (
     AgentIdentity(
         "intake",
         "ResourcePilot Intake",
-        "Turns a sentence or a form into a validated booking brief",
+        "Turns a submitted form into a validated brief, keeping only the school domain",
         8001,
     ),
     AgentIdentity(
         "discovery",
         "ResourcePilot Seller Discovery",
-        "Finds seller agents and collects live quotes from them",
+        "Finds seller agents, including Campus Rooms, and collects quotes from them",
         8002,
     ),
     AgentIdentity(
         "verification",
         "ResourcePilot Seller Verification",
-        "Vets seller identity, protocol conformance, track record, and policy",
+        "Vets sellers four ways and re-checks official housing links live",
         8003,
     ),
     AgentIdentity(
@@ -89,7 +89,7 @@ PLATFORM_ROLES: Final[tuple[AgentIdentity, ...]] = (
     AgentIdentity(
         "planner",
         "ResourcePilot Bundle Planner",
-        "Builds budget-safe bundles with backups",
+        "Builds budget-safe bundles and ranks live room options",
         8005,
     ),
     AgentIdentity(
@@ -103,6 +103,12 @@ PLATFORM_ROLES: Final[tuple[AgentIdentity, ...]] = (
         "ResourcePilot Memory and Audit",
         "Keeps the audit timeline, preferences, and seller track records",
         8007,
+    ),
+    AgentIdentity(
+        "researcher",
+        "ResourcePilot Campus Researcher",
+        "Finds a school's room-booking system and housing pages from its email domain",
+        8008,
     ),
 )
 
@@ -138,8 +144,15 @@ SELLER_AGENTS: Final[tuple[AgentIdentity, ...]] = (
     AgentIdentity(
         "studio_rooms",
         "Hilltop Studio Rooms (demo seller)",
-        "Rents podcast studios and study rooms by the hour",
+        "Rents podcast studios by the hour",
         8104,
+        "seller",
+    ),
+    AgentIdentity(
+        "campus_rooms",
+        "Campus Rooms (live library rooms)",
+        "Quotes real open library study rooms at any school as free booking handoffs",
+        8105,
         "seller",
     ),
 )
@@ -148,8 +161,23 @@ ALL_AGENTS: Final = PLATFORM_ROLES + SELLER_AGENTS
 ROLE_BY_KEY: Final = {role.key: role for role in PLATFORM_ROLES}
 SELLER_BY_KEY: Final = {seller.key: seller for seller in SELLER_AGENTS}
 
-# The sequential planning pipeline. Discovery fans out to sellers inside its own step.
-SPECIALIST_CHAIN: Final = ("intake", "discovery", "verification", "analysis", "planner")
+# The sequential pipelines, one per campus service. Discovery fans out to sellers inside its own
+# step. A project bundle visits the Campus Researcher only when the student adds a school email.
+SERVICES: Final = ("rooms", "housing", "bundle")
+SERVICE_CHAINS: Final[dict[str, tuple[str, ...]]] = {
+    "rooms": ("intake", "researcher", "discovery", "verification", "analysis", "planner"),
+    "housing": ("intake", "researcher", "verification"),
+    "bundle": ("intake", "researcher", "discovery", "verification", "analysis", "planner"),
+}
+SPECIALISTS: Final = frozenset(role for chain in SERVICE_CHAINS.values() for role in chain)
+
+
+def service_chain(service: str, payload: dict[str, object] | None = None) -> tuple[str, ...]:
+    chain = SERVICE_CHAINS.get(service, SERVICE_CHAINS["bundle"])
+    brief = (payload or {}).get("brief")
+    if service == "bundle" and not (isinstance(brief, dict) and brief.get("school_domain")):
+        return tuple(role for role in chain if role != "researcher")
+    return chain
 
 
 def _normalize(raw: str) -> str:

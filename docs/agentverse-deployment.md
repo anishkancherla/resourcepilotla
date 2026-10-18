@@ -4,7 +4,7 @@
 
 1. Run `make start`, then `make profiles`.
 2. Sign in to [Agentverse](https://agentverse.ai/).
-3. Open every Inspector URL that `make profiles` printed: eight platform agents and five
+3. Open every Inspector URL that `make profiles` printed: nine platform agents and six
    sellers.
 4. Confirm the address, click **Connect**, and choose **Mailbox**.
 5. On each profile, confirm that the README and Chat Protocol manifest are there:
@@ -12,8 +12,12 @@
    - Discovery, the Checkout Coordinator, and every seller show `ResourceHold`.
 6. Open each profile chat and check that it answers with its status card.
 
-Agents send each other messages through their Mailboxes, so all 13 must be connected before a
+Agents send each other messages through their Mailboxes, so all 15 must be connected before a
 booking can complete.
+
+Upgrading from the 13-agent version? Run `make bootstrap-missing`. It asks first, then adds
+identities only for the Campus Researcher and Campus Rooms, so every existing address and profile
+stays the same. Connect just those two new agents with Mailbox.
 
 In Docker, every published port is bound to host loopback and targets container port `18000`. A
 small TCP relay there forwards to the uAgent through container loopback. uAgents accepts Inspector
@@ -26,12 +30,14 @@ Mailbox relays and queues messages for a local agent. It does not keep a sleepin
 
 The track rewards agents that keep running after the event. To get there:
 
-- Deploy the Compose stack to an always-on host. Keep the same 13 seeds so the addresses do not
+- Deploy the Compose stack to an always-on host. Keep the same 15 seeds so the addresses do not
   change, and keep the seeds in the host's secret manager.
+- The Campus Researcher and Campus Rooms need outbound https to IPEDS, schools' websites, and
+  LibCal. They need no API keys.
 - Use managed Postgres with backups, and point `DATABASE_URL` at it.
 - Re-open every profile after deploying, then test a chat, a full Mock Stripe booking, and a
   reroute.
-- Capture the shared ASI:One chat link with the Orchestrator and all 13 profile links for
+- Capture the shared ASI:One chat link with the Orchestrator and all 15 profile links for
   Devpost.
 
 Hosted Agentverse agents have different process and state constraints. Do not assume this

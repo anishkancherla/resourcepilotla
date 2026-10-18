@@ -3,6 +3,10 @@
 A seller quotes, places a time-limited hold, and turns the hold into a booking only when the
 buyer commits. A hold can always be released. No message in this protocol moves money; escrow
 payment and payouts stay with the ResourcePilot Orchestrator.
+
+Version 1.1.0 adds an optional ``campus`` context (school domain, timezone, and the room system
+the Campus Researcher found). Only live sellers receive it; catalog sellers ignore it. A live
+seller's offers are $0 handoff lines that carry the slot and the school's own booking link.
 """
 
 from __future__ import annotations
@@ -14,7 +18,7 @@ from uagents import Model
 from uagents_core.protocol import ProtocolSpecification
 
 PROTOCOL_NAME = "ResourceHold"
-PROTOCOL_VERSION = "1.0.0"
+PROTOCOL_VERSION = "1.1.0"
 
 
 class QuoteRequest(Model):
@@ -24,6 +28,7 @@ class QuoteRequest(Model):
     quantities: dict[str, int]
     window_start: str
     window_end: str
+    campus: dict[str, str] = Field(default_factory=dict)
 
 
 class Quote(Model):
@@ -43,6 +48,7 @@ class HoldRequest(Model):
     quantity: int
     window_start: str
     window_end: str
+    campus: dict[str, str] = Field(default_factory=dict)
 
 
 class HoldConfirmed(Model):

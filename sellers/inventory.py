@@ -154,7 +154,10 @@ async def commit_hold(
 ) -> BookingConfirmed | HoldRejected:
     code = confirmation_code(listing.seller_id, request.hold_id)
     hold = await store.get_hold(request.hold_id)
-    if hold is None or hold["seller_id"] != listing.seller_id:
+    if request.payment_reference.startswith("free:"):
+        # Free references exist only for Campus Rooms handoffs; a priced item needs escrow.
+        status = "unpaid"
+    elif hold is None or hold["seller_id"] != listing.seller_id:
         status = "missing"
     else:
         status = await store.commit_hold(request.hold_id, request.payment_reference, code, now)

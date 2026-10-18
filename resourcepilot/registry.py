@@ -7,6 +7,10 @@ controls whether it trusts that seller.
 ``identity_verified`` is a demo listing attribute. In production it would be backed by evidence
 such as Agentverse domain verification or a Fetch Business brand claim. This repository does not
 query either service and does not claim to.
+
+``live`` marks Campus Rooms, the one seller backed by a live public source instead of a demo
+catalog. Its offers are always $0 handoff lines: ResourcePilot re-checks the slot but never
+reserves it, and the student books on the school's own site.
 """
 
 from __future__ import annotations
@@ -24,12 +28,13 @@ class SellerListing:
     display_name: str
     categories: tuple[str, ...]
     location_label: str
-    lat: float
-    lon: float
+    lat: float | None
+    lon: float | None
     open_hour: int
     close_hour: int
     identity_verified: bool
     verification_basis: str
+    live: bool = False
 
     @property
     def address(self) -> str:
@@ -92,7 +97,7 @@ LISTINGS: Final[tuple[SellerListing, ...]] = (
     SellerListing(
         "studio_rooms",
         "Hilltop Studio Rooms",
-        ("podcast_room", "study_room"),
+        ("podcast_room",),
         "Hilltop arts building",
         34.0725,
         -118.4420,
@@ -100,6 +105,19 @@ LISTINGS: Final[tuple[SellerListing, ...]] = (
         23,
         True,
         "Demo listing: identity marked verified during onboarding",
+    ),
+    SellerListing(
+        "campus_rooms",
+        "Campus Rooms",
+        ("study_room",),
+        "Your school's library",
+        None,
+        None,
+        0,
+        24,
+        True,
+        "Runs from this repository and reads only public room pages the Campus Researcher found",
+        live=True,
     ),
 )
 
@@ -109,7 +127,7 @@ CATEGORIES: Final = {
     "microphone": "Microphone",
     "tripod": "Tripod",
     "podcast_room": "Podcast studio",
-    "study_room": "Study room",
+    "study_room": "Study room at your school",
     "posters": "Color posters",
 }
 # Categories priced per item rather than per hour.

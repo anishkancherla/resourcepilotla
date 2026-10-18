@@ -1,7 +1,8 @@
 # Architecture
 
-ResourcePilot is 13 independent uAgents that share one Postgres database. Eight platform agents own
-the workflow. Five demo seller agents own their own inventory and answer only over messages.
+ResourcePilot is 15 independent uAgents that share one Postgres database. Nine platform agents own
+the workflow. Six seller agents answer only over messages: five demo sellers own their own
+inventory, and Campus Rooms reads real open study rooms from a school's public LibCal pages.
 
 ## Protocols
 
@@ -9,13 +10,64 @@ the workflow. Five demo seller agents own their own inventory and answer only ov
 | --- | --- | --- |
 | Agent Chat Protocol | Every agent | `ChatMessage`, `ChatAcknowledgement` |
 | `ResourcePilotTasks` 1.0.0 | Platform agents | `TaskRequest`, `TaskResult`, `AuditEvent` |
-| `ResourceHold` 1.0.0 | Discovery and Checkout Coordinator (`buyer`), sellers (`seller`) | see below |
+| `ResourceHold` 1.1.0 | Discovery and Checkout Coordinator (`buyer`), sellers (`seller`) | see below |
 | Agent Payment Protocol | Orchestrator (`seller`), the buyer in ASI:One | `RequestPayment`, `CommitPayment`, `RejectPayment`, `CompletePayment`, `CancelPayment` |
 
 `ResourceHold` is a typed `ProtocolSpecification` with two roles. Sellers implement `QuoteRequest`
 to `Quote`, `HoldRequest` to `HoldConfirmed` or `HoldRejected`, `CommitHold` to
 `BookingConfirmed` or `HoldRejected`, and `ReleaseHold`. The seller-role digest is what optional
 Almanac discovery searches for.
+
+Version 1.1.0 adds an optional `campus` map of strings to `QuoteRequest` and `HoldRequest`. It
+carries the school context the Campus Researcher found: domain, school name, timezone, booking
+system, booking URL, LibCal host, group size, and room duration. Discovery sends it only to live
+listings, so demo sellers never see it.
+
+## Services and their chains
+
+The Orchestrator answers every chat with a card. A greeting or any free text gets the services
+menu; there is no sentence parser. Each menu button opens a form, and each form submission
+starts a workflow for one service.
+
+| Service | Specialist chain | Ends with |
+| --- | --- | --- |
+| `rooms` | Intake → Campus Researcher → Discovery → Verification → Analysis → Planner | A rooms carousel, then a free booking-link checkout |
+| `housing` | Intake → Campus Researcher → Verification | A housing card (status `answered`) |
+| `bundle` | Intake → [Campus Researcher] → Discovery → Verification → Analysis → Planner | A bundle carousel, then escrow checkout |
+
+A bundle asks the Researcher only when the form adds a free study room and a school email.
+
+Before any workflow exists, the Orchestrator reduces every email field to its domain
+(`scrub_fields`). The local part of the address is never stored, sent, or logged.
+
+### Campus Researcher
+
+The Researcher matches the domain to a school using the IPEDS directory. The directory is about
+15MB, so it is fetched once, compacted to a domain index, and cached for a week. A department
+subdomain matches its parent domain, and branch campuses that share a parent domain name the
+system without claiming a campus. A non-`.edu` domain that IPEDS does not know is refused. If
+IPEDS cannot be read, the request fails with a retryable error rather than guessing a timezone.
+
+For rooms it then finds the booking system, stopping at the first hit:
+
+1. a hand-checked list (for example `ucla.edu`);
+2. `<school>.libcal.com/allspaces`, accepted only when the page links back to the school;
+3. a crawl of `lib.`, `library.`, `libraries.`, and similar starting pages. The crawl goes at most
+   two hops, follows room-booking links, and recognizes LibCal, EMS, 25Live, Skedda, and Robin. A
+   LibCal site is confirmed by its `/allspaces` page.
+
+If none of these finds a system, the workflow pauses at `awaiting_link`, and the Orchestrator
+shows a card with one link field. A pasted link goes back to the Researcher, which checks it with
+the same rules. A link that fails the checks returns the same card with the reason. In a bundle,
+the student can instead skip the room.
+
+For housing it reads IPEDS institutional characteristics and finds the housing office page. The
+portal must be a link on the office's own pages, or on its housing vendor (StarRez), that reads
+like an application or portal. Seller Verification then re-opens each official link itself and
+drops any that do not open.
+
+Results are cached per domain in `api_cache`: a week when found, a day otherwise. The fetch rules
+are in [trust-model.md](trust-model.md).
 
 ## The planning pipeline
 
@@ -71,12 +123,33 @@ past its deadline. Because rounds live in Postgres, a restarted agent finishes i
 5. **Settle.** The Orchestrator writes seller payouts and the fee to the escrow ledger, marks the
    payment delivered, and sends a terminal receipt card.
 
+### Free study-room lines
+
+A Campus Rooms line costs $0 and is a booking handoff, not a reservation.
+
+- **Hold.** The hold is a live re-check: Campus Rooms reads LibCal's availability for that exact
+  slot and confirms only if it is still open. It records a marker hold so two ResourcePilot
+  students are not handed the same slot at once.
+- **Rooms only.** If every line is a free handoff, there is no payment step. The review card offers
+  **Get booking link**. The commit round then uses the reference `free:<workflow_id>`. The
+  Orchestrator accepts that reference only when every hold is a $0 Campus Rooms hold, and demo
+  sellers refuse it. No payment record or escrow entry is created.
+- **Mixed bundle.** The free line joins the hold round with the paid lines. Escrow, the fee, and
+  every payout cover only the paid lines, and no paid seller commits before the payment is
+  verified and reserved. Campus Rooms answers the commit with the booking link and never fails a
+  paid bundle.
+
+The receipt lists each free line under **Book it yourself**, with the school's link.
+
 ## Recovery
 
 | Failure | What happens |
 | --- | --- |
 | Seller does not quote | Discovery reports it after `QUOTE_WINDOW_SECONDS`; the carousel says which category is missing |
 | Seller rejects, reprices, or ignores a hold | Every hold is released and nothing is charged. The Planner replans with `exclude_sellers`, and a new carousel shows the reroute. |
+| A study room is taken during the re-check | Only that room is dropped (`exclude_items`), not Campus Rooms, and the remaining open rooms are shown |
+| The Researcher finds no booking system | The workflow waits at `awaiting_link` for a pasted link, or a bundle continues without the room |
+| LibCal's availability endpoint fails | Campus Rooms offers the school's booking link only, never invented rooms |
 | Seller fails to commit after payment | Every booking is cancelled and the payment is released back to `released` in escrow. A recovery card offers **Retry booking** (re-hold, then commit with the same payment) or **Refund me**. |
 | Buyer waits after a failed booking | The Orchestrator refunds automatically after `PAYMENT_DEADLINE_SECONDS` |
 | A specialist task is lost | The Orchestrator retries it once with a fresh request ID, then fails with a clear card |
@@ -99,6 +172,7 @@ reads that record on the next request.
 | `payments` | Payment references and their state machine; transaction IDs are unique |
 | `escrow_entries` | Payouts, the fee, and refunds, each with a deterministic ID |
 | `seller_stats`, `seller_settings` | Track-record counters and demo fault modes |
+| `api_cache` | Cached public lookups (IPEDS, Researcher results, LibCal pages) with an expiry |
 
 Payment states: `requested` → `verified` → `reserved` → `delivered`. A failed booking goes from
 `reserved` to `released`, after which a retry returns it to `reserved` or a refund moves it to

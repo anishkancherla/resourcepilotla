@@ -4,9 +4,13 @@ import json
 from datetime import UTC, datetime
 from uuid import uuid4
 
+from provider_fakes import SEARCH_DAY, dumps
 from uagents_core.contrib.protocols.chat import ChatMessage, TextContent
 
-from resourcepilot.cards import EXAMPLE_REQUEST
+from resourcepilot.cards import example_bundle_selection
+
+# A distinctive local part, so the safety check below can prove it was never kept.
+EMAIL_USER = "zq-student-7781"
 
 
 def chat(text: str | dict) -> ChatMessage:
@@ -22,32 +26,63 @@ def last_card(network, kind: str | None = None) -> tuple[str, dict, str]:
     return found[-1]
 
 
-async def test_welcome_and_form_cards(network) -> None:
+def completed_roles(network) -> list[str]:
+    events = next(iter(network.store.events.values()))
+    return [e["details"].get("role") for e in events if e["event_type"] == "specialist_completed"]
+
+
+def rooms_form(domain: str = "purdue.edu", **fields: str) -> dict:
+    return {
+        "action": "submit_form",
+        "service": "rooms",
+        "email": f"{EMAIL_USER}@{domain}",
+        "day": SEARCH_DAY.isoformat(),
+        "window": "afternoon",
+        "duration": "60",
+        "group_size": "2",
+        **fields,
+    }
+
+
+async def test_every_reply_is_a_card_and_free_text_gets_the_menu(network) -> None:
     await network.send_user(chat("hi"))
     kind, payload, _ = last_card(network)
-    assert kind == "custom"
-    assert payload["root"]["title"] == "ResourcePilot"
-    await network.send_user(chat({"action": "open_form"}))
-    assert last_card(network)[0] == "form"
+    assert (kind, payload["root"]["title"]) == ("custom", "ResourcePilot campus services")
+    await network.send_user(chat("I need a DSLR Friday 3-6pm under $35"))
+    _, menu, narration = last_card(network)
+    assert menu["root"]["title"] == "ResourcePilot campus services"
+    assert "buttons and forms" in narration
+    assert network.store.workflows == {}  # a sentence never starts a request
+    await network.send_user(chat("can I book a study room"))
+    _, form, _ = last_card(network, "form")
+    assert form["submit_cta"]["selection"]["service"] == "rooms"
+    for service in ("housing", "bundle"):
+        await network.send_user(chat({"action": "open_service", "service": service}))
+        assert last_card(network, "form")[1]["submit_cta"]["selection"]["service"] == service
+    assert len(network.cards()) == len(network.texts())  # no plain-text reply anywhere
 
 
-async def test_sentence_runs_the_whole_planning_network(network) -> None:
-    await network.send_user(chat(EXAMPLE_REQUEST))
+async def test_demo_bundle_runs_the_planning_network(network) -> None:
+    await network.send_user(chat(example_bundle_selection()))
     _, payload, narration = last_card(network, "carousel")
     assert payload["items"], narration
     assert "Flash Prints 4U" in narration
     assert "Lowest price" in [item["title"] for item in payload["items"]]
     assert network.dropped == []
-
-    events = next(iter(network.store.events.values()))
-    roles = [e["details"].get("role") for e in events if e["event_type"] == "specialist_completed"]
-    assert roles == ["intake", "discovery", "verification", "analysis", "planner"]
+    assert completed_roles(network) == [
+        "intake",
+        "discovery",
+        "verification",
+        "analysis",
+        "planner",
+    ]
     assert network.store.stats["gear_share"]["quotes_sent"] == 1
+    assert "campus_rooms" not in network.store.stats  # no study room, so it is never asked
     assert network.store.preferences  # Memory/Audit saved the buyer's preferences
 
 
 async def test_bundle_detail_and_vetting_cards(network) -> None:
-    await network.send_user(chat(EXAMPLE_REQUEST))
+    await network.send_user(chat(example_bundle_selection()))
     _, carousel, _ = last_card(network, "carousel")
     await network.send_user(chat(carousel["items"][0]["primary_cta"]["selection"]))
     _, detail, _ = last_card(network, "detail")
@@ -63,7 +98,7 @@ async def test_bundle_detail_and_vetting_cards(network) -> None:
 
 async def test_silent_seller_is_reported_after_the_quote_window(network) -> None:
     await network.store.set_fault_mode("studio_rooms", "ghost_quotes")
-    await network.send_user(chat(EXAMPLE_REQUEST))
+    await network.send_user(chat(example_bundle_selection()))
     assert not [card for card in network.cards() if card[0] == "carousel"]
     await network.advance(6)
     narration = last_card(network, "carousel")[2]
@@ -71,15 +106,110 @@ async def test_silent_seller_is_reported_after_the_quote_window(network) -> None
     assert network.store.stats["studio_rooms"]["no_responses"] == 1
 
 
-async def test_incomplete_sentence_asks_with_a_form(network) -> None:
-    await network.send_user(chat("I need some posters and a camera"))
-    kind, _, narration = last_card(network)
+async def test_incomplete_form_asks_again_with_the_same_form(network) -> None:
+    await network.send_user(chat({"action": "submit_form", "service": "bundle", "posters": "5"}))
+    kind, form, narration = last_card(network)
     assert kind == "form"
+    assert form["submit_cta"]["selection"]["service"] == "bundle"
     assert "Missing" in narration
 
 
+async def test_study_room_flow_ends_in_a_free_booking_link(network) -> None:
+    await network.send_user(chat(rooms_form()))
+    _, carousel, narration = last_card(network, "carousel")
+    assert "Purdue" in narration
+    assert completed_roles(network) == [
+        "intake",
+        "researcher",
+        "discovery",
+        "verification",
+        "analysis",
+        "planner",
+    ]
+    first = carousel["items"][0]
+    # Both rooms open at noon; the 2-seat room is the snuggest fit for a group of 2.
+    assert [item["title"] for item in carousel["items"]] == ["WALC 3138", "HSSE 2101"]
+    assert "Live · LibCal" in [badge["label"] for badge in first["badges"]]
+    await network.send_user(chat(first["primary_cta"]["selection"]))
+    _, detail, _ = last_card(network, "detail")
+    assert detail["ctas"][0]["label"] == "Re-check this room"
+    await network.send_user(chat(detail["ctas"][0]["selection"]))
+    _, review, _ = last_card(network, "review")
+    assert review["approve_cta"]["selection"]["action"] == "confirm_free"
+    await network.send_user(chat(review["approve_cta"]["selection"]))
+    _, receipt, _ = last_card(network, "detail")
+    assert receipt["title"] == "Your booking link"
+    assert "https://calendar.lib.purdue.edu/space/102" in json.dumps(receipt)
+    state = next(iter(network.store.workflows.values()))
+    assert state["status"] == "booked"
+    assert state["payment_reference"] == f"free:{state['workflow_id']}"
+    assert network.store.payments == {}  # free rooms never create a payment or escrow
+    assert network.store.escrow == {}
+    # Only the school domain ever reached a workflow, event, cache entry, or message.
+    stored = dumps(
+        [network.store.workflows, network.store.events, network.store.cache, network.store.claims]
+    )
+    assert EMAIL_USER not in stored
+    assert all(EMAIL_USER not in text for text in network.texts())
+
+
+async def test_room_taken_during_recheck_goes_back_to_the_rooms(network) -> None:
+    await network.send_user(chat(rooms_form()))
+    _, carousel, _ = last_card(network, "carousel")
+    await network.send_user(chat(carousel["items"][0]["primary_cta"]["selection"]))
+    _, detail, _ = last_card(network, "detail")
+    network.use_http(booked={"102@12:00"})
+    await network.send_user(chat(detail["ctas"][0]["selection"]))
+    assert not [card for card in network.cards() if card[0] == "review"]
+    assert any("just booked" in text for text in network.texts())
+    assert last_card(network)[0] == "carousel"
+    assert network.store.payments == {}
+
+
+async def test_unknown_room_system_asks_for_the_link_then_checks_it(network) -> None:
+    await network.send_user(chat(rooms_form("mit.edu")))
+    _, ask, _ = last_card(network, "custom")
+    assert ask["root"]["title"].startswith("Where does Massachusetts Institute")
+    submit = ask["root"]["children"][-1]["children"][0]["action"]["selection"]
+    assert submit["action"] == "submit_link"
+    await network.send_user(chat({**submit, "booking_link": "https://evil.example.com/rooms"}))
+    assert "https link" in last_card(network)[2]
+    await network.send_user(
+        chat({**submit, "booking_link": "https://libraries.mit.edu/study/reserve-a-room"})
+    )
+    _, carousel, _ = last_card(network, "carousel")
+    assert carousel["items"][0]["badges"][-1]["label"] == "Link only"
+
+
+async def test_housing_flow_shows_facts_and_rechecked_links(network) -> None:
+    await network.send_user(
+        chat({"action": "submit_form", "service": "housing", "email": f"{EMAIL_USER}@purdue.edu"})
+    )
+    _, card, _ = last_card(network, "detail")
+    assert card["title"] == "Housing at Purdue University-Main Campus · West Lafayette, IN"
+    rows = {row["label"]: row["value"] for row in card["summary_rows"]}
+    assert rows["Dorm beds"] == "16,056"
+    assert rows["Housing office"] == "https://housing.purdue.edu/"
+    assert (
+        rows["Apply \u00b7 My Housing portal"]
+        == "https://purdue.starrezhousing.com/StarRezPortalX/"
+    )
+    assert "Links re-checked live by Verification" in rows["Sources"]
+    assert completed_roles(network) == ["intake", "researcher", "verification"]
+    assert next(iter(network.store.workflows.values()))["status"] == "answered"
+
+
+async def test_non_school_email_is_refused_with_a_card(network) -> None:
+    await network.send_user(
+        chat({"action": "submit_form", "service": "housing", "email": "someone@gmail.com"})
+    )
+    kind, _, narration = last_card(network)
+    assert kind == "custom"
+    assert "not a US college domain" in narration
+
+
 async def test_specialists_and_sellers_answer_profile_chats(network) -> None:
-    for key in ("verification", "gear_share", "flash_prints"):
+    for key in ("verification", "researcher", "gear_share", "campus_rooms", "flash_prints"):
         await network.send_user(chat("hello"), to=key)
         kind, payload, _ = last_card(network)
         assert kind == "custom"
@@ -92,7 +222,7 @@ async def test_specialists_and_sellers_answer_profile_chats(network) -> None:
 async def test_forged_task_results_are_ignored(network) -> None:
     from resourcepilot.models import TaskResult
 
-    await network.send_user(chat(EXAMPLE_REQUEST))
+    await network.send_user(chat(example_bundle_selection()))
     state = next(iter(network.store.workflows.values()))
     forged = TaskResult(
         workflow_id=state["workflow_id"],

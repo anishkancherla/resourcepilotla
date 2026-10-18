@@ -20,6 +20,21 @@ Orchestrator ─CompletePayment─▶ buyer (or CancelPayment with a reason)
 - Refundable deposits, such as a camera deposit, are shown on the cards and paid to the seller at
   pickup. They are not taken through escrow.
 
+## Free study rooms are outside escrow
+
+A Campus Rooms line is a $0 booking handoff. ResourcePilot re-checks that the room is open and
+then gives the student the school's booking link; it never reserves or pays for the room.
+
+- **Rooms only.** When every line in the checkout is a free handoff, there is no payment step.
+  The commit round uses the reference `free:<workflow_id>`. The Orchestrator accepts it only
+  when every hold is a $0 hold from a live Campus Rooms listing. No payment record, fee, or escrow
+  entry is created, and demo sellers refuse a `free:` reference.
+- **Mixed bundle.** The fee is computed on the paid lines only, and escrow covers only the paid
+  lines. Payouts never include Campus Rooms. The usual rule still holds: no paid seller commits
+  before the payment is verified and reserved.
+- **Receipts.** Free lines appear under **Book it yourself**, with the school's link and a note
+  that ResourcePilot did not reserve the room.
+
 ## The two rails
 
 ### Mock Stripe (`stripe_mock`)
@@ -39,8 +54,8 @@ Payouts and refunds on this rail are recorded as `simulated`, with IDs starting
 `STRIPE_MOCK_PAYOUT:` or `STRIPE_MOCK_REFUND:`.
 
 `make stripe-mock` runs [scripts/demo_payment_buyer.py](../scripts/demo_payment_buyer.py). It is a
-buyer agent that sends the example request, clicks through the cards, and commits a Mock Stripe
-payment.
+buyer agent that submits the example demo-bundle form, clicks through the cards, and commits a
+Mock Stripe payment.
 
 ### Test FET (`fet_direct`)
 

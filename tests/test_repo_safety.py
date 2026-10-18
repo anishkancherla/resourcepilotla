@@ -89,3 +89,10 @@ def test_documented_make_commands_exist() -> None:
         if document.exists():
             commands = set(re.findall(r"\bmake ([a-z][a-z-]*)", document.read_text()))
             assert commands <= targets, f"{document.name}: {commands - targets}"
+
+
+def test_school_email_is_reduced_to_a_domain_in_the_orchestrator() -> None:
+    runtime = (ROOT / "agents" / "run.py").read_text()
+    # Every form submission passes through scrub_fields before a workflow is created.
+    assert "return scrub_fields(fields)" in runtime
+    assert "_start_workflow(ctx, sender, service, _form_fields(selection))" in runtime

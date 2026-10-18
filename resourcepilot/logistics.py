@@ -1,4 +1,8 @@
-"""Logistics analysis: can each trusted offer actually be ready, and how far is the walk?"""
+"""Logistics analysis: can each trusted offer actually be ready, and how far is the walk?
+
+Walking time is computed only for the demo shops, which have campus coordinates. A live room at
+the student's own school has none, so it is labeled on campus and left out of the route.
+"""
 
 from __future__ import annotations
 
@@ -31,7 +35,7 @@ def analysis_handler(payload: dict[str, Any], context: dict[str, Any]) -> dict[s
     brief = dict(payload["brief"])
     now = parse(str(context["now"])) if context.get("now") else utc_now()
     window_start = parse(str(brief["window_start"]))
-    _, anchor_lat, anchor_lon = ANCHORS[str(brief["anchor"])]
+    _, anchor_lat, anchor_lon = ANCHORS.get(str(brief.get("anchor")), ANCHORS["student_union"])
     rejections = list(payload.get("rejections", []))
     analyzed = []
     for raw in payload.get("offers", []):
@@ -48,9 +52,12 @@ def analysis_handler(payload: dict[str, Any], context: dict[str, Any]) -> dict[s
                 }
             )
             continue
-        offer["walk_minutes"] = walk_minutes(
-            anchor_lat, anchor_lon, float(offer["lat"]), float(offer["lon"])
-        )
+        if offer.get("lat") is None or offer.get("lon") is None:
+            offer["walk_minutes"] = None
+        else:
+            offer["walk_minutes"] = walk_minutes(
+                anchor_lat, anchor_lon, float(offer["lat"]), float(offer["lon"])
+            )
         analyzed.append(offer)
     covered = {offer["category"] for offer in analyzed}
     if not covered:

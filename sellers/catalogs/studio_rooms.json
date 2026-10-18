@@ -12,19 +12,5 @@
     "rating": 4.7,
     "tags": ["podcast", "studio", "recording", "room"],
     "policy": "Two microphones and an audio interface included. Leave 10 minutes for reset."
-  },
-  {
-    "item_id": "study_room",
-    "category": "study_room",
-    "name": "Study room for 6",
-    "unit": "hour",
-    "unit_price_cents": 200,
-    "capacity": 3,
-    "ready_in_hours": 0,
-    "deposit_cents": 0,
-    "requires_training": false,
-    "rating": 4.4,
-    "tags": ["study", "room", "meeting"],
-    "policy": "Whiteboard and display included."
   }
 ]
