@@ -22,6 +22,8 @@ CONTRACT = {
     "patch_workflow",
     "list_overdue_workflows",
     "recent_bookings",
+    "get_profile",
+    "save_profile",
     "append_event",
     "list_events",
     "cache_get",
@@ -66,7 +68,13 @@ def test_postgres_creates_only_the_tables_still_used() -> None:
         for line in store_module.SCHEMA.splitlines()
         if line.startswith("CREATE TABLE IF NOT EXISTS")
     }
-    assert tables == {"idempotency_keys", "workflows", "workflow_events", "api_cache"}
+    assert tables == {
+        "idempotency_keys",
+        "workflows",
+        "workflow_events",
+        "api_cache",
+        "student_profiles",
+    }
 
 
 def test_build_store_uses_postgres_only_when_configured(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -164,6 +172,20 @@ async def test_recent_bookings_are_the_requesters_booked_workflows_newest_first(
     assert [state["workflow_id"] for state in await any_store.recent_bookings(requester, 1)] == [
         second
     ]
+
+
+async def test_profiles_keep_one_school_per_requester(any_store: DurableStore, unique: str) -> None:
+    requester = f"agent-{unique}"
+    assert await any_store.get_profile(requester) is None
+    await any_store.save_profile(requester, {"school_domain": "purdue.edu", "school_name": ""})
+    await any_store.save_profile(
+        requester, {"school_domain": "mit.edu", "school_name": "Massachusetts Institute"}
+    )
+    assert await any_store.get_profile(requester) == {
+        "school_domain": "mit.edu",
+        "school_name": "Massachusetts Institute",
+    }
+    assert await any_store.get_profile(f"other-{unique}") is None
 
 
 async def test_events_are_append_only_and_ordered(any_store: DurableStore, unique: str) -> None:

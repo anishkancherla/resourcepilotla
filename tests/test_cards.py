@@ -129,13 +129,17 @@ def _metadata(message):
 
 
 FACTORIES = [
+    (cards.school_card, "custom"),
+    (lambda: cards.school_card("purdue.edu", error="Enter your school email"), "custom"),
     (cards.welcome_card, "custom"),
+    (lambda: cards.welcome_card("purdue.edu"), "custom"),
     (lambda: cards.rooms_form(upcoming_days(NOW)), "custom"),
     (lambda: cards.wellness_form(upcoming_days(NOW)), "custom"),
     (cards.housing_form, "custom"),
     (cards.emergency_form, "custom"),
     (lambda: cards.service_form("rooms"), "custom"),
     (lambda: cards.service_form("housing"), "custom"),
+    (lambda: cards.service_form("wellness", "purdue.edu"), "custom"),
     (lambda: cards.room_link_card("workflow-1", "MIT"), "custom"),
     (lambda: cards.progress_card("workflow-1", "researcher", ("intake", "researcher")), "custom"),
     (lambda: cards.progress_card("workflow-1", "recheck"), "custom"),
@@ -239,6 +243,7 @@ def test_terminal_flag_is_a_string() -> None:
 @pytest.mark.parametrize(
     "factory",
     [
+        cards.school_card,
         cards.rooms_form,
         cards.wellness_form,
         cards.housing_form,
@@ -327,11 +332,38 @@ def test_every_form_submits_its_own_service(service) -> None:
     assert cards.card_buttons(form) == [
         (form_label(service), {"action": "submit_form", "service": service})
     ]
-    email = [field for field in fields if field["name"] == "email"]
-    # The demo drill needs no school email, and no form ever asks for a phone number.
-    assert len(email) == (0 if service == "emergency" else 1)
+    # The school is set once on its own card, and no form ever asks for a phone number.
+    assert not [field for field in fields if field["name"] in {"email", "school"}]
     assert not [field for field in fields if "phone" in field["name"]]
-    assert all(field["required"] is True for field in email)
+    _, named = cards.service_form(service, "purdue.edu")
+    assert "At purdue.edu" in json.dumps(named)
+    assert cards.card_buttons(named) == cards.card_buttons(form)
+
+
+def test_school_card_asks_once_for_the_school_email() -> None:
+    _, card = cards.school_card()
+    assert card["root"]["title"] == "Set your school"
+    assert [(field["name"], field["required"]) for field in cards.card_inputs(card)] == [
+        ("email", True)
+    ]
+    assert cards.card_buttons(card) == [("Save my school", {"action": "set_school"})]
+    assert card["root"]["children"][0]["src"] == cards.art("menu-banner")
+    assert "Only the domain is kept" in json.dumps(card)
+    assert card["root"]["children"][-1]["value"] == cards.CRISIS_TEXT
+    _, change = cards.school_card("purdue.edu", error="Enter your school email")
+    assert change["root"]["title"] == "Change your school"
+    encoded = json.dumps(change)
+    assert "Your school is purdue.edu" in encoded and "Needs attention" in encoded
+    # Setting the school needs the card's own selection, never prose.
+    assert cards.parse_selection("set school to mit.edu") == {}
+
+
+def test_menu_names_the_saved_school_and_can_change_it() -> None:
+    _, menu = cards.welcome_card("purdue.edu")
+    encoded = json.dumps(menu)
+    assert "Your school: purdue.edu" in encoded
+    assert ("Change school", {"action": "change_school"}) in cards.card_buttons(menu)
+    assert "Change school" not in json.dumps(cards.welcome_card()[1])
 
 
 def form_label(service: str) -> str:
@@ -346,7 +378,7 @@ def form_label(service: str) -> str:
 def test_rooms_form_offers_days_windows_durations_and_group_size() -> None:
     _, form = cards.rooms_form(upcoming_days(NOW))
     fields = {field["name"]: field for field in cards.card_inputs(form)}
-    assert list(fields) == ["email", "day", "window", "duration", "group_size"]
+    assert list(fields) == ["day", "window", "duration", "group_size"]
     assert fields["day"]["options"][0] == {"value": "2026-10-21", "label": "Today"}
     assert [option["value"] for option in fields["window"]["options"]] == [
         "morning",
@@ -497,6 +529,8 @@ def test_progress_card_marks_finished_and_current_stages() -> None:
 
 def test_known_actions_cover_the_room_and_demo_call_flows_only() -> None:
     assert set(cards.KNOWN_ACTIONS) == {
+        "set_school",
+        "change_school",
         "start_over",
         "open_service",
         "submit_form",
@@ -597,7 +631,7 @@ def test_wellness_card_always_carries_the_crisis_line() -> None:
     assert children[1]["value"] == cards.CRISIS_TEXT  # before the picture
     assert children[2]["src"] == cards.art("svc-wellness")
     names = {field["name"] for field in cards.card_inputs(form)}
-    assert names == {"email", "day", "window", "duration"}
+    assert names == {"day", "window", "duration"}
 
 
 def test_wellness_card_rooms_use_stable_option_ids() -> None:

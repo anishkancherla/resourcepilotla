@@ -11,7 +11,7 @@ from urllib.parse import parse_qs
 import httpx
 import pytest
 from network import SESSION, _load, build_env, click, last_with
-from test_network import EMAIL_USER, chat, completed_roles, housing_form, last_card
+from test_network import EMAIL_USER, chat, completed_roles, housing_form, last_card, submit
 from uagents_core.contrib.protocols.payment import (
     CancelPayment,
     CommitPayment,
@@ -350,7 +350,7 @@ def fet_commit(reference: str | None, tx_hash: str = TX, claimed: str = "1") -> 
 
 async def open_offer(network) -> tuple[str, dict[str, Any]]:
     """Search Purdue housing and stop at the paid-match offer."""
-    await network.send_user(chat(housing_form(who="first_year", need_ac="true")))
+    await submit(network, housing_form(who="first_year", need_ac="true"))
     _, offer, narration = last_with(network, "unlock_housing")
     assert "Test mode only" in narration
     return str(workflow(network)["workflow_id"]), offer
@@ -518,7 +518,7 @@ async def test_a_failed_checkout_charges_nothing_and_can_be_retried(network, mon
 
 async def test_no_halls_means_no_offer_and_no_charge(network, monkeypatch) -> None:
     fake = enable_payments(network, monkeypatch, STRIPE)
-    await network.send_user(chat(housing_form("mit.edu")))
+    await submit(network, housing_form("mit.edu"))
     _, card, _ = last_card(network, "detail")
     rows = {row["label"]: row["value"] for row in card["summary_rows"]}
     assert rows["Halls"].startswith("Couldn't read individual halls")

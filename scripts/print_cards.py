@@ -101,9 +101,10 @@ def show(title: str, card: tuple[str, dict[str, Any]], *, terminal: bool = False
 
 
 def samples() -> None:
-    show("Campus services menu", cards.welcome_card())
+    show("Set your school", cards.school_card())
+    show("Campus services menu", cards.welcome_card("example.edu"))
     for service in ("rooms", "wellness", "housing", "emergency"):
-        show(f"{service} form", cards.service_form(service))
+        show(f"{service} form", cards.service_form(service, "example.edu"))
     show("Wellness card, nothing found", cards.wellness_card("demo", {}))
     show("Paste-link fallback", cards.room_link_card("demo", "Example University"))
     chain = ("intake", "researcher", "campus_rooms", "verification", "planner")

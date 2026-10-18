@@ -20,15 +20,17 @@ The optional steps add about a minute.
 
 ## 1. The services menu (15 s)
 
-Say "hi". The Orchestrator answers with the campus services menu: **Study rooms**, **Health &
+Say "hi". The Orchestrator first asks for your school email, once; enter a Purdue email and press
+**Save my school**. Only the domain is kept, and every service uses it. The Orchestrator then
+answers with the campus services menu: **Study rooms**, **Health &
 wellness**, **Campus housing**, **Emergency (demo)**, and **My bookings**. The 988 crisis line is
 at the bottom. Type a sentence instead, and it answers with the same menu: every request starts
 from a button and a short form.
 
 ## 2. A real study room at any school (55 s)
 
-Press **Open study rooms**. Enter your school email, a day, a time of day, a duration, and the
-group size, then press **Find open rooms**.
+Press **Open study rooms**. Pick a day, a time of day, a duration, and the group size, then
+press **Find open rooms**. No email again: the form uses the school you saved.
 
 While the progress card moves, say: "Intake keeps only the domain. The Campus Researcher matched
 the school in IPEDS and found its LibCal site." For Purdue, that site lives at
@@ -56,22 +58,22 @@ uv run pytest tests/test_network.py -k taken -v
 
 ## 4. No booking system found: the paste-link card (25 s)
 
-Press **Find another room** and search with the MIT email. The Researcher finds no system it
+Press **Menu**, then **Change school**, save an MIT email, and search for a room again. The Researcher finds no system it
 recognizes, so it asks instead of guessing: a card with one field for the room-booking link.
 Paste the library's
 booking link and press **Check this link**. The Researcher checks the pasted link with the same
 rules as one it found itself. Optional: paste a link on another domain first, and the same card
 comes back with the reason.
 
-Optional (30 s): press **Menu**, then **Open health & wellness** with a Purdue email. The card
+Optional (30 s): change the school back to Purdue, then press **Open health & wellness**. The card
 starts with 988 and 911, then shows open wellness rooms from Purdue's LibCal and the week's health
 events from `events.purdue.edu`, each with its RSVP link. Say: "It never asks about your health.
 The crisis line is static, so it shows even when a school has nothing to find."
 
 ## 5. Campus housing (25 s)
 
-Press **Menu**, then **Open campus housing**. Enter a Purdue, Georgia Tech, or UC Riverside email,
-pick **Incoming first-year**, tick **Air conditioning**, and press **Find housing**. If payments are
+Press **Menu**, then **Open campus housing** (the school is Purdue; Georgia Tech or UC Riverside
+also work, via **Change school**), pick **Incoming first-year**, tick **Air conditioning**, and press **Find housing**. If payments are
 set up, the hall-match offer appears first: press **Unlock my hall match** and pay in ASI:One's
 payment panel with Stripe's test card `4242 4242 4242 4242` (any future date and CVC) or testnet
 FET. Say: "The facts are free. The match is the one paid step, in test mode, and the Orchestrator

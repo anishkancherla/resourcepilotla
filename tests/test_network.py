@@ -4,7 +4,7 @@ import json
 from datetime import UTC, datetime
 from uuid import uuid4
 
-from network import click, has_action, last_with
+from network import USER, click, has_action, last_with
 from provider_fakes import SEARCH_DAY, dumps
 from uagents_core.contrib.protocols.chat import ChatMessage, TextContent
 
@@ -32,6 +32,15 @@ def completed_roles(network) -> list[str]:
     return [e["details"].get("role") for e in events if e["event_type"] == "specialist_completed"]
 
 
+async def submit(network, form: dict, email: str = "") -> None:
+    """Set the school once from the student's email, then send the form, which has no email."""
+    fields = dict(form)
+    email = str(fields.pop("email", "") or email)
+    if email:
+        await network.send_user(chat({"action": "set_school", "email": email}))
+    await network.send_user(chat(fields))
+
+
 def rooms_form(domain: str = "purdue.edu", **fields: object) -> dict:
     return {
         "action": "submit_form",
@@ -47,7 +56,7 @@ def rooms_form(domain: str = "purdue.edu", **fields: object) -> dict:
 
 async def open_first_room(network) -> tuple[dict, dict]:
     """Search Purdue, open the first room, and return (carousel, detail)."""
-    await network.send_user(chat(rooms_form()))
+    await submit(network, rooms_form())
     _, carousel, _ = last_card(network, "carousel")
     await network.send_user(chat(carousel["items"][0]["primary_cta"]["selection"]))
     _, detail, _ = last_card(network, "detail")
@@ -58,7 +67,57 @@ def recheck_cta(detail: dict) -> dict:
     return next(c for c in detail["ctas"] if c["selection"]["action"] == "recheck_room")
 
 
+async def test_the_first_prompt_only_sets_the_school(network) -> None:
+    await network.send_user(chat("hi"))
+    kind, card, narration = last_card(network)
+    assert (kind, card["root"]["title"]) == ("custom", "Set your school")
+    assert "First, set your school" in narration
+    assert click(card, "set_school") == {"action": "set_school"}
+    # Nothing starts, and no service form opens, until the school is set.
+    await network.send_user(chat({"action": "open_service", "service": "rooms"}))
+    assert last_card(network)[1]["root"]["title"] == "Set your school"
+    await network.send_user(chat(rooms_form()))
+    assert last_card(network)[1]["root"]["title"] == "Set your school"
+    assert network.store.workflows == {}
+    await network.send_user(chat({"action": "set_school", "email": "not an email"}))
+    _, retry, narration = last_card(network)
+    assert retry["root"]["title"] == "Set your school" and "you@purdue.edu" in narration
+    await network.send_user(chat({"action": "set_school", "email": f"{EMAIL_USER}@CS.Purdue.edu"}))
+    _, menu, narration = last_card(network)
+    assert menu["root"]["title"] == "ResourcePilot campus services"
+    assert "Your school is cs.purdue.edu" in narration
+    assert ("Change school", {"action": "change_school"}) in cards.card_buttons(menu)
+    assert network.store.profiles == {USER: {"school_domain": "cs.purdue.edu", "school_name": ""}}
+    # Every service form reuses it; none asks for an email again.
+    for service in ("rooms", "wellness", "housing", "emergency"):
+        await network.send_user(chat({"action": "open_service", "service": service}))
+        _, form, _ = last_with(network, "submit_form")
+        assert "At cs.purdue.edu" in json.dumps(form)
+        assert not [f for f in cards.card_inputs(form) if f["name"] in {"email", "school"}]
+    await network.send_user(chat({"action": "change_school"}))
+    _, change, _ = last_card(network)
+    assert change["root"]["title"] == "Change your school"
+    await network.send_user(chat({"action": "set_school", "email": "pat@mit.edu"}))
+    assert network.store.profiles[USER]["school_domain"] == "mit.edu"
+    assert EMAIL_USER not in dumps(network.store.profiles)
+
+
+async def test_every_service_runs_at_the_saved_school(network) -> None:
+    await open_first_room(network)
+    # The Researcher's name for the saved school is kept for later services.
+    assert network.store.profiles[USER] == {
+        "school_domain": "purdue.edu",
+        "school_name": "Purdue University-Main Campus",
+    }
+    # A field left over from an old form never changes the school.
+    await network.send_user(chat({**rooms_form("mit.edu"), "school_domain": "mit.edu"}))
+    briefs = [state["data"]["brief"] for state in network.store.workflows.values()]
+    assert [brief["school_domain"] for brief in briefs] == ["purdue.edu", "purdue.edu"]
+    assert EMAIL_USER not in dumps([network.store.workflows, network.store.events])
+
+
 async def test_every_reply_is_a_card_and_free_text_gets_the_menu(network) -> None:
+    await network.send_user(chat({"action": "set_school", "email": "pat@purdue.edu"}))
     await network.send_user(chat("hi"))
     kind, payload, _ = last_card(network)
     assert (kind, payload["root"]["title"]) == ("custom", "ResourcePilot campus services")
@@ -150,7 +209,7 @@ async def test_silent_recheck_returns_to_the_room_list(network) -> None:
 
 async def test_silent_specialist_is_retried_once_then_reported(network) -> None:
     network.set_offline("planner")
-    await network.send_user(chat(rooms_form()))
+    await submit(network, rooms_form())
     await network.advance(31)
     state = next(iter(network.store.workflows.values()))
     assert (state["status"], state["retried_stages"]) == ("running", ["planner"])
@@ -161,15 +220,15 @@ async def test_silent_specialist_is_retried_once_then_reported(network) -> None:
 
 
 async def test_unknown_room_system_asks_for_the_link_then_checks_it(network) -> None:
-    await network.send_user(chat(rooms_form("mit.edu")))
+    await submit(network, rooms_form("mit.edu"))
     _, ask, _ = last_card(network, "custom")
     assert ask["root"]["title"].startswith("Where does Massachusetts Institute")
-    submit = ask["root"]["children"][-1]["children"][0]["action"]["selection"]
-    assert submit["action"] == "submit_link"
-    await network.send_user(chat({**submit, "booking_link": "https://evil.example.com/rooms"}))
+    link = ask["root"]["children"][-1]["children"][0]["action"]["selection"]
+    assert link["action"] == "submit_link"
+    await network.send_user(chat({**link, "booking_link": "https://evil.example.com/rooms"}))
     assert "https link" in last_card(network)[2]
     await network.send_user(
-        chat({**submit, "booking_link": "https://libraries.mit.edu/study/reserve-a-room"})
+        chat({**link, "booking_link": "https://libraries.mit.edu/study/reserve-a-room"})
     )
     _, carousel, _ = last_card(network, "carousel")
     assert carousel["items"][0]["badges"][-1]["label"] == "Link only"
@@ -194,7 +253,7 @@ def wellness_view_buttons(card: dict) -> list[dict]:
 
 
 async def test_wellness_flow_shows_crisis_rooms_and_events_then_a_link(network) -> None:
-    await network.send_user(chat(wellness_form()))
+    await submit(network, wellness_form())
     _, card, narration = last_card(network, "custom")
     assert card["root"]["title"] == "Health & wellness at Purdue University-Main Campus"
     assert "988" in narration
@@ -225,7 +284,7 @@ async def test_wellness_flow_shows_crisis_rooms_and_events_then_a_link(network) 
 
 
 async def test_wellness_room_taken_during_recheck_returns_to_the_wellness_card(network) -> None:
-    await network.send_user(chat(wellness_form()))
+    await submit(network, wellness_form())
     (view,) = wellness_view_buttons(last_card(network, "custom")[1])
     await network.send_user(chat(view))
     _, detail, _ = last_card(network, "detail")
@@ -241,7 +300,7 @@ async def test_wellness_room_taken_during_recheck_returns_to_the_wellness_card(n
 async def test_wellness_without_rooms_or_events_still_answers_with_the_crisis_line(
     network,
 ) -> None:
-    await network.send_user(chat(wellness_form("mit.edu")))
+    await submit(network, wellness_form("mit.edu"))
     _, card, _ = last_card(network, "custom")
     encoded = json.dumps(card, ensure_ascii=False)
     assert "988" in encoded
@@ -252,7 +311,7 @@ async def test_wellness_without_rooms_or_events_still_answers_with_the_crisis_li
 
 
 async def test_wellness_explains_a_libcal_without_wellness_rooms(network) -> None:
-    await network.send_user(chat(wellness_form("ucla.edu")))
+    await submit(network, wellness_form("ucla.edu"))
     _, card, _ = last_card(network, "custom")
     assert "No wellness rooms are listed" in json.dumps(card)
     assert wellness_view_buttons(card) == []
@@ -269,7 +328,7 @@ def housing_form(domain: str = "purdue.edu", **fields: str) -> dict:
 
 
 async def test_housing_shows_each_hall_matched_to_the_criteria(network) -> None:
-    await network.send_user(chat(housing_form(who="first_year", need_ac="true")))
+    await submit(network, housing_form(who="first_year", need_ac="true"))
     assert completed_roles(network) == ["intake", "researcher", "verification", "planner"]
     _, carousel, narration = last_card(network, "carousel")
     assert carousel["title"] == "On-campus housing at Purdue University-Main Campus"
@@ -325,7 +384,7 @@ async def test_housing_shows_each_hall_matched_to_the_criteria(network) -> None:
 
 
 async def test_school_without_readable_halls_gets_facts_and_links(network) -> None:
-    await network.send_user(chat(housing_form("mit.edu")))
+    await submit(network, housing_form("mit.edu"))
     _, card, _ = last_card(network, "detail")
     rows = {row["label"]: row["value"] for row in card["summary_rows"]}
     assert rows["Halls"].startswith("Couldn't read individual halls")
@@ -333,7 +392,7 @@ async def test_school_without_readable_halls_gets_facts_and_links(network) -> No
 
 
 async def test_housing_flow_shows_facts_and_rechecked_links(network) -> None:
-    await network.send_user(chat(housing_form()))
+    await submit(network, housing_form())
     _, carousel, _ = last_card(network, "carousel")
     await network.send_user(chat(carousel["items"][-1]["primary_cta"]["selection"]))
     _, card, _ = last_card(network, "detail")
@@ -348,8 +407,8 @@ async def test_housing_flow_shows_facts_and_rechecked_links(network) -> None:
 
 
 async def test_non_school_email_is_refused_with_a_card(network) -> None:
-    await network.send_user(
-        chat({"action": "submit_form", "service": "housing", "email": "someone@gmail.com"})
+    await submit(
+        network, {"action": "submit_form", "service": "housing", "email": "someone@gmail.com"}
     )
     kind, _, narration = last_card(network)
     assert kind == "custom"
@@ -377,7 +436,7 @@ async def test_specialists_answer_profile_chats(network) -> None:
 async def test_forged_task_results_are_ignored(network) -> None:
     from resourcepilot.models import TaskResult
 
-    await network.send_user(chat(rooms_form()))
+    await submit(network, rooms_form())
     state = next(iter(network.store.workflows.values()))
     forged = TaskResult(
         workflow_id=state["workflow_id"],
@@ -427,7 +486,6 @@ EMERGENCY_FORM = {
     "people": "1",
     "details": f"Student fainted. Email {EMAIL_USER}@ucla.edu",
     "caller_safe": "yes",
-    "school": "UCLA",
     # A number in the form is never dialed; only EMERGENCY_DEMO_TO_NUMBER is.
     "to_number": "+19495550199",
 }
@@ -441,11 +499,12 @@ async def test_emergency_drill_reviews_then_places_exactly_one_call(network, mon
     from test_emergency import API_KEY, DEMO_NUMBER
 
     fake = emergency_setup(network, monkeypatch)
+    await network.send_user(chat({"action": "set_school", "email": f"{EMAIL_USER}@ucla.edu"}))
     await network.send_user(chat({"action": "open_service", "service": "emergency"}))
     _, form, _ = last_with(network, "submit_form")
     assert click(form, "submit_form") == {"action": "submit_form", "service": "emergency"}
     assert form["root"]["children"][1]["value"] == cards.DEMO_NOTICE  # before the picture
-    await network.send_user(chat(EMERGENCY_FORM))
+    await submit(network, EMERGENCY_FORM, f"{EMAIL_USER}@ucla.edu")
     _, review, narration = last_with(network, "place_call")
     assert completed_roles(network) == ["emergency"]
     assert fake.requests == []  # nothing is dialed before Call now
@@ -481,7 +540,7 @@ async def test_emergency_drill_reviews_then_places_exactly_one_call(network, mon
 
 async def test_a_lost_demo_call_answer_is_never_retried(network, monkeypatch) -> None:
     fake = emergency_setup(network, monkeypatch)
-    await network.send_user(chat(EMERGENCY_FORM))
+    await submit(network, EMERGENCY_FORM, f"{EMAIL_USER}@ucla.edu")
     _, review, _ = last_with(network, "place_call")
     network.set_offline("emergency")
     await network.send_user(chat(click(review, "place_call")))
@@ -498,14 +557,14 @@ async def test_a_lost_demo_call_answer_is_never_retried(network, monkeypatch) ->
 async def test_emergency_without_setup_explains_and_calls_no_one(network, monkeypatch) -> None:
     for key in ("ELEVENLABS_API_KEY", "EMERGENCY_DEMO_TO_NUMBER"):
         monkeypatch.delenv(key, raising=False)
-    await network.send_user(chat(EMERGENCY_FORM))
+    await submit(network, EMERGENCY_FORM, f"{EMAIL_USER}@ucla.edu")
     assert any("not set up yet" in text for text in network.texts())
     assert not [card for card in network.cards() if has_action(card, "place_call")]
     assert next(iter(network.store.workflows.values()))["status"] == "failed"
 
 
 async def test_a_picture_tile_pick_sent_as_a_one_item_list_is_unwrapped(network) -> None:
-    await network.send_user(chat(rooms_form(window=["afternoon"], duration=["60"])))
+    await submit(network, rooms_form(window=["afternoon"], duration=["60"]))
     _, carousel, _ = last_card(network, "carousel")
     assert [item["title"] for item in carousel["items"]] == ["WALC 3138", "HSSE 2101"]
     second = carousel["items"][1]

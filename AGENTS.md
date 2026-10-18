@@ -43,6 +43,10 @@ official pages in [docs/official-links.md](docs/official-links.md) for anything 
   - `emergency`: Emergency Dispatcher (`phase="preview"`) → review card (`awaiting_call`).
     **Call now** sends the Dispatcher a `phase="call"` task, then the call card (`called`).
     **Check the call** sends a `phase="status"` task and shows the transcript.
+- The first prompt only sets the student's school: until a school is saved, every message gets
+  the school card (`set_school`). The school email's domain is saved once per requester
+  (`student_profiles`) and the Orchestrator adds it to every service form, so no form asks for an
+  email or a school. **Change school** (`change_school`) on the menu switches it.
 - The Orchestrator offers services from a menu: Study rooms, Health & wellness, Campus housing,
   Emergency (demo), and My bookings.
   Requests start only from a form submission; free text gets the menu card, never a workflow.

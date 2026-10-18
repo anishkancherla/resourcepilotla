@@ -53,7 +53,7 @@ def test_room_brief_defaults_to_one_person_for_an_hour_in_the_afternoon() -> Non
 @pytest.mark.parametrize(
     ("overrides", "message"),
     [
-        ({"school_domain": ""}, "school email"),
+        ({"school_domain": ""}, "your school, set from the menu"),
         ({"email_invalid": True}, "valid school email"),
         ({"school_domain": "localhost"}, "school email"),
         ({"day": ""}, "a day from the list"),

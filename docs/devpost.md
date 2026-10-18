@@ -60,9 +60,11 @@ never guess what you meant.
 
 ### 📚 Study rooms
 
-Press **Open study rooms**, enter your school email, a day, a time, how long, and your group size.
+Save your school email once, then press **Open study rooms** and pick a day, a time, how long,
+and your group size.
 
-1. **Intake** strips your email down to the domain (`purdue.edu`). Your name never leaves the form.
+1. Your email is stripped down to the domain (`purdue.edu`) before it is saved, and **Intake**
+   checks the form against it. Your name never leaves the first card.
 2. **Campus Researcher** matches the domain to your school in IPEDS, then finds the library's
    booking system: a hand-checked list, then a `<school>.libcal.com` probe, then a short crawl of
    the library site that catches custom domains like Purdue's.

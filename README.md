@@ -12,8 +12,10 @@ short forms, with a card for every reply.
 | **Emergency (demo)** | A demo-drill phone call that describes an emergency to your team's demo contact, never 911, then the call's summary and transcript | ElevenLabs voice agent over your own Twilio number or SIP trunk (e.g. Telnyx) |
 | **My bookings** | Your recent re-checked rooms and their booking links | ResourcePilot's workflow records |
 
-Study rooms work for **any US school**, not only one campus. You enter your school email. Intake
-keeps only the domain, and the Campus Researcher matches it to the school in IPEDS. It then finds
+Study rooms work for **any US school**, not only one campus. The first card asks for your school
+email, once: the Orchestrator keeps only the domain and uses it for every service, so no form asks
+again (**Change school** on the menu switches it). The Campus Researcher matches the domain to the
+school in IPEDS. It then finds
 the library's room-booking system:
 
 - a hand-checked list;
@@ -45,7 +47,9 @@ This repository uses public Fetch.ai packages and documentation only.
 
 Every reply in ASI:One is a picture card:
 
+- The first card sets your school once, under the menu banner.
 - The menu is a banner and a grid of picture tiles, one per service, like the Welcome Week hubs.
+  It names your school and offers **Change school**.
 - Each form has a picture of its service. The wellness form keeps the 988 crisis line first, and
   the emergency form keeps its demo-drill notice first.
 - Progress cards show the agent at work, with each specialist's own art.
@@ -149,7 +153,8 @@ My bookings   Orchestrator ─▶ your recent re-checked rooms
 ```
 
 Every arrow between agents is a `TaskRequest` sent with `ctx.send` and answered by a `TaskResult`.
-Requests start only from a form; free text gets the services menu. Details are in
+Requests start only from a form; until your school is set, every message gets the school card,
+and after that free text gets the services menu. Details are in
 [docs/architecture.md](docs/architecture.md).
 
 ## Trust: why the Orchestrator may send you to a link

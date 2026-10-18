@@ -1,4 +1,5 @@
-"""Durable shared state: workflows, one-time claims, the audit timeline, and the live-data cache.
+"""Durable shared state: workflows, one-time claims, the audit timeline, the live-data cache, and
+each student's saved school.
 
 Postgres is the shared durable path every agent process uses. ``MemoryStore`` keeps the same
 contract in one process and is for tests and explicit local development only.
@@ -45,6 +46,11 @@ class DurableStore(Protocol):
 
     async def recent_bookings(self, requester: str, limit: int) -> list[dict[str, Any]]: ...
 
+    # The student's school, set once and reused by every service: a domain, never an email
+    async def get_profile(self, requester: str) -> dict[str, Any] | None: ...
+
+    async def save_profile(self, requester: str, profile: dict[str, Any]) -> None: ...
+
     # Append-only audit timeline
     async def append_event(
         self, workflow_id: str, event_id: str, event_type: str, details: dict[str, Any]
@@ -68,6 +74,7 @@ class MemoryStore:
         self.claims: set[tuple[str, str]] = set()
         self.events: dict[str, list[dict[str, Any]]] = {}
         self.cache: dict[str, tuple[float, Any]] = {}
+        self.profiles: dict[str, dict[str, Any]] = {}
         self._lock = asyncio.Lock()
 
     async def setup(self) -> None:
@@ -128,6 +135,13 @@ class MemoryStore:
         ]
         return list(reversed(values))[:limit]
 
+    async def get_profile(self, requester: str) -> dict[str, Any] | None:
+        value = self.profiles.get(requester)
+        return deepcopy(value) if value else None
+
+    async def save_profile(self, requester: str, profile: dict[str, Any]) -> None:
+        self.profiles[requester] = deepcopy(profile)
+
     async def append_event(
         self, workflow_id: str, event_id: str, event_type: str, details: dict[str, Any]
     ) -> bool:
@@ -168,6 +182,10 @@ CREATE TABLE IF NOT EXISTS workflow_events (
 );
 CREATE TABLE IF NOT EXISTS api_cache (
   key TEXT PRIMARY KEY, payload JSONB NOT NULL, expires_at TIMESTAMPTZ NOT NULL
+);
+CREATE TABLE IF NOT EXISTS student_profiles (
+  requester TEXT PRIMARY KEY, profile JSONB NOT NULL,
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 """
 
@@ -261,6 +279,21 @@ class PostgresStore:
             limit,
         )
         return [json.loads(row["state"]) for row in rows]
+
+    async def get_profile(self, requester: str) -> dict[str, Any] | None:
+        value = await self._pool().fetchval(
+            "SELECT profile FROM student_profiles WHERE requester=$1", requester
+        )
+        return json.loads(value) if value else None
+
+    async def save_profile(self, requester: str, profile: dict[str, Any]) -> None:
+        await self._pool().execute(
+            """INSERT INTO student_profiles(requester,profile) VALUES($1,$2::jsonb)
+               ON CONFLICT(requester) DO UPDATE
+               SET profile=EXCLUDED.profile, updated_at=now()""",
+            requester,
+            json.dumps(profile),
+        )
 
     async def append_event(
         self, workflow_id: str, event_id: str, event_type: str, details: dict[str, Any]

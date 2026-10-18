@@ -104,14 +104,15 @@ ElevenLabs API (section 6). The web page rules:
   port or user info and at most 400 characters. A hall's photo is already limited to an
   `og:image` on the school's domain. ResourcePilot never fetches an image itself, so a photo
   cannot reach an internal address through the agents.
-- **Health.** The wellness form asks only for the school email, a day, and a duration. Nothing
+- **Health.** The wellness form asks only for a day and a duration; the school was set once. Nothing
   about a student's health is asked, stored, or logged, and ResourcePilot books no health or
   counseling appointments. The 988 and 911 crisis line is static text on every wellness card and
   on the menu, so it shows even when nothing at the school can be found.
 - **Hosts from another agent.** Campus Rooms reads only a LibCal host that is on the school's own
   domain or `libcal.com`, even though the Researcher already checked it.
-- **Privacy.** Only the school domain of an email address is kept. The local part never reaches a
-  workflow, an event, a message, the cache, or a log.
+- **Privacy.** Only the school domain of an email address is kept, saved once per requester and
+  reused by every service. The local part never reaches a workflow, an event, a message, the
+  saved school, the cache, or a log.
 
 A pasted booking link goes through the same checks, so a student cannot use ResourcePilot to fetch
 an arbitrary URL.

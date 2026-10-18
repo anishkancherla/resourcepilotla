@@ -3,11 +3,12 @@
 ResourcePilot offers four campus services from a menu: free study rooms at the student's own
 school, health and wellness (quiet rooms, the week's wellness events, and the 988 crisis line),
 campus housing facts with official links, and an emergency demo drill that phones one teammate,
-never 911. Every reply is a card: the menu, a short form,
-progress, a carousel of open rooms, the wellness card, a room detail, the booking-link receipt,
-the housing card, and recent bookings. ResourcePilot never reserves a room, applies for housing,
-or pays for housing. The one paid step is optional: the hall-by-hall housing match, offered on its
-own card after the free facts are ready, paid in Stripe test mode or testnet FET.
+never 911. Every reply is a card: the school card (set once, then reused by every service), the
+menu, a short form, progress, a carousel of open rooms, the wellness card, a room detail, the
+booking-link receipt, the housing card, and recent bookings. ResourcePilot never reserves a
+room, applies for housing, or pays for housing. The one paid step is optional: the hall-by-hall
+housing match, offered on its own card after the free facts are ready, paid in Stripe test mode or
+testnet FET.
 
 Every payload uses only the fields documented on the Innovation Lab interactive-cards page.
 ASI:One silently falls back to plain text when a payload has an unexpected shape, so
@@ -126,6 +127,8 @@ LIST_ITEM_FIELDS = {"children", "action"}
 
 # Every action a card selection can carry; the Orchestrator routes exactly these.
 KNOWN_ACTIONS = (
+    "set_school",
+    "change_school",
     "start_over",
     "open_service",
     "submit_form",
@@ -145,11 +148,11 @@ KNOWN_ACTIONS = (
 )
 # A card offering any of these waits for the student, so it can never be marked terminal.
 INPUT_ACTIONS = frozenset(
-    {"submit_form", "submit_link", "recheck_room", "place_call", "unlock_housing"}
+    {"set_school", "submit_form", "submit_link", "recheck_room", "place_call", "unlock_housing"}
 )
-# Bounded allowlist for planner-mediated prose: it only opens menus and views. Submitting a form,
-# re-checking a room, submitting a link, placing a demo call, or asking to pay needs the stable IDs
-# that only a card selection carries.
+# Bounded allowlist for planner-mediated prose: it only opens menus and views. Setting the school,
+# submitting a form, re-checking a room, submitting a link, placing a demo call, or asking to pay
+# needs the stable IDs that only a card selection carries.
 PROSE_ACTIONS = ("open_orchestrator", "show_status", "show_results", "show_bookings", "start_over")
 # Prose that only opens a service's form, never submits one.
 SERVICE_WORDS = (
@@ -164,6 +167,8 @@ SERVICE_WORDS = (
     ),
     ("housing", re.compile(r"\bhousing\b|\bdorms?\b|\bresidence\s+halls?\b", re.I)),
 )
+# Services whose results depend on the saved school; a wrong school is fixed from their errors.
+SCHOOL_SERVICES = ("rooms", "wellness", "housing")
 SERVICE_TITLES = {
     "rooms": "Study rooms",
     "wellness": "Health & wellness",
@@ -610,8 +615,11 @@ def _tile(
     }
 
 
-def welcome_card() -> tuple[str, dict[str, Any]]:
-    """The campus services menu as picture tiles, two to a row, in the spirit of Welcome Week."""
+def welcome_card(school: str = "") -> tuple[str, dict[str, Any]]:
+    """The campus services menu as picture tiles, two to a row, in the spirit of Welcome Week.
+
+    Every service uses the school the student set once; the menu names it and can change it.
+    """
     children: list[dict[str, Any]] = [
         *_image("menu-banner", "ResourcePilot campus services"),
         {
@@ -623,6 +631,17 @@ def welcome_card() -> tuple[str, dict[str, Any]]:
             "style": "body",
         },
     ]
+    if school:
+        children.append(
+            {
+                "type": "group",
+                "direction": "row",
+                "children": [
+                    {"type": "badge", "label": f"Your school: {school}", "variant": "info"},
+                    _button("Change school", {"action": "change_school"}),
+                ],
+            }
+        )
     tiles = [
         _tile(
             f"svc-{service}",
@@ -679,6 +698,8 @@ def error_card(message: str, *, service: str | None = None) -> tuple[str, dict[s
     actions: list[tuple[str, dict[str, Any]]] = []
     if service in SERVICE_TITLES:
         actions.append(("Open the form", {"action": "open_service", "service": service}))
+    if service in SCHOOL_SERVICES:
+        actions.append(("Change school", {"action": "change_school"}))
     actions.append(("Start over", {"action": "start_over"}))
     return notice_card(
         "ResourcePilot", message, badge="Needs attention", variant="warning", buttons=actions
@@ -708,6 +729,66 @@ def _email_field() -> dict[str, Any]:
     return {"name": "email", "kind": "text", "label": "School email", "required": True}
 
 
+def school_card(current: str = "", *, error: str = "") -> tuple[str, dict[str, Any]]:
+    """The first card: the student sets their school once, and every service reuses it.
+
+    Only the domain of the email is kept; the part before ``@`` is dropped before it is stored.
+    """
+    kind, payload = _form_to_custom(
+        {
+            "title": "Change your school" if current else "Set your school",
+            "fields": [_email_field()],
+            "submit_cta": {"label": "Save my school", "selection": {"action": "set_school"}},
+        },
+        "menu-banner",
+        "ResourcePilot campus services",
+    )
+    intro: list[dict[str, Any]] = []
+    if error:
+        intro.append({"type": "badge", "label": "Needs attention", "variant": "warning"})
+        intro.append({"type": "text", "value": error, "style": "body"})
+    intro.append(
+        {
+            "type": "text",
+            "value": (
+                f"Your school is {current}. Enter another school email to switch."
+                if current
+                else "Enter your school email once. Study rooms, wellness, housing, and the "
+                "emergency drill all use it."
+            ),
+            "style": "body",
+        }
+    )
+    intro.append(
+        {
+            "type": "text",
+            "value": "Only the domain is kept, for example purdue.edu. The part before @ is "
+            "never stored.",
+            "style": "muted",
+        }
+    )
+    children = payload["root"]["children"]
+    at = 1 if children and children[0]["type"] == "image" else 0
+    children[at:at] = intro
+    children.append({"type": "text", "value": CRISIS_TEXT, "style": "muted"})
+    return kind, payload
+
+
+def _with_school(card: tuple[str, dict[str, Any]], school: str) -> tuple[str, dict[str, Any]]:
+    """Name the saved school on a form, just under its picture."""
+    kind, payload = card
+    if school:
+        children = payload["root"]["children"]
+        at = next(
+            (index + 1 for index, child in enumerate(children) if child["type"] == "image"), 0
+        )
+        children.insert(
+            at,
+            {"type": "text", "value": f"At {school} · change it from the menu", "style": "muted"},
+        )
+    return kind, payload
+
+
 def _day_options(days: list[tuple[str, str]]) -> list[tuple[str, str]]:
     return [(value, "Today" if index == 0 else text) for index, (value, text) in enumerate(days)]
 
@@ -718,7 +799,6 @@ def rooms_form(days: list[tuple[str, str]] | None = None) -> tuple[str, dict[str
         {
             "title": "Find a study room at your school",
             "fields": [
-                _email_field(),
                 _select("day", "Day", _day_options(days or upcoming_days()), required=True),
                 _select(
                     "window",
@@ -740,12 +820,11 @@ def rooms_form(days: list[tuple[str, str]] | None = None) -> tuple[str, dict[str
 
 
 def wellness_form(days: list[tuple[str, str]] | None = None) -> tuple[str, dict[str, Any]]:
-    """No health questions: only the school, a day, and how long a quiet room is needed."""
+    """No health questions: only a day and how long a quiet room is needed."""
     kind, payload = _form_to_custom(
         {
             "title": "Health & wellness at your school",
             "fields": [
-                _email_field(),
                 _select("day", "Day", _day_options(days or upcoming_days()), required=True),
                 _select(
                     "window",
@@ -802,7 +881,6 @@ def emergency_form() -> tuple[str, dict[str, Any]]:
                 _select("people", "People who need help", [(str(n), str(n)) for n in range(1, 11)]),
                 {"name": "details", "kind": "text", "label": "Anything else (optional)"},
                 _select("caller_safe", "Are you safe right now?", [("yes", "Yes"), ("no", "No")]),
-                {"name": "school", "kind": "text", "label": "School (optional)"},
             ],
             "submit_cta": {
                 "label": "Review the demo call",
@@ -818,7 +896,7 @@ def emergency_form() -> tuple[str, dict[str, Any]]:
 
 
 def housing_form() -> tuple[str, dict[str, Any]]:
-    """The school plus the criteria the Planner matches each hall against."""
+    """The criteria the Planner matches each hall against, at the saved school."""
     must_haves = [
         {"name": f"need_{key}", "kind": "checkbox", "label": label}
         for key, label in HOUSING_FEATURES.items()
@@ -827,7 +905,6 @@ def housing_form() -> tuple[str, dict[str, Any]]:
         {
             "title": "On-campus housing at your school",
             "fields": [
-                _email_field(),
                 _select("who", "I am a", list(HOUSING_WHO.items()), required=True),
                 _select("style", "Housing style", list(HOUSING_STYLES.items())),
                 *must_haves,
@@ -847,15 +924,17 @@ def housing_form() -> tuple[str, dict[str, Any]]:
     )
 
 
-def service_form(service: str) -> tuple[str, dict[str, Any]]:
-    """The form for one service; an unknown service gets the rooms form, like the chains."""
+def service_form(service: str, school: str = "") -> tuple[str, dict[str, Any]]:
+    """The form for one service at the saved school; an unknown service gets the rooms form."""
     if service == "housing":
-        return housing_form()
-    if service == "wellness":
-        return wellness_form()
-    if service == "emergency":
-        return emergency_form()
-    return rooms_form()
+        card = housing_form()
+    elif service == "wellness":
+        card = wellness_form()
+    elif service == "emergency":
+        card = emergency_form()
+    else:
+        card = rooms_form()
+    return _with_school(card, school)
 
 
 def room_link_card(workflow_id: str, school: str) -> tuple[str, dict[str, Any]]:

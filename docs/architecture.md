@@ -56,8 +56,14 @@ ends at the Planner has options to re-check (`awaiting_selection`).
 **My bookings** starts no chain. The Orchestrator reads your five most recent workflows whose
 status is `booked` from the shared store and shows them as one card.
 
-Before any workflow exists, the Orchestrator reduces every email field to its domain
-(`scrub_fields`). The local part of the address is never stored, sent, or logged.
+The first prompt only sets the school. Until a requester has a saved school, every message gets
+the school card; its **Save my school** selection (`set_school`) carries the school email, which
+the Orchestrator reduces to its domain (`scrub_fields`) and saves once per requester in the shared
+store (`student_profiles`). Every service form then starts from that domain: the Orchestrator adds
+it to the submitted fields, so no form asks for an email or a school, and a field an old form
+carried never changes it. When the Researcher matches the saved school, its name is kept too, so
+the emergency drill can say it. **Change school** (`change_school`) on the menu shows the school
+card again. The local part of the address is never stored, sent, or logged.
 
 ### Campus Researcher
 

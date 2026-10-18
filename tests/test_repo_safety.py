@@ -93,6 +93,9 @@ def test_documented_make_commands_exist() -> None:
 
 def test_school_email_is_reduced_to_a_domain_in_the_orchestrator() -> None:
     runtime = (ROOT / "agents" / "run.py").read_text()
-    # Every form submission passes through scrub_fields before a workflow is created.
+    # The saved school and every form submission pass through scrub_fields first.
     assert "return scrub_fields(fields)" in runtime
-    assert "_start_workflow(ctx, sender, service, _form_fields(selection))" in runtime
+    assert "fields = _form_fields(selection)" in runtime
+    assert "_start_workflow(ctx, sender, service, _form_fields(selection), profile=profile)" in (
+        runtime
+    )
