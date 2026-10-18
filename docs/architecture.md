@@ -175,7 +175,8 @@ whether you are safe, and an optional school name. Its chain is only the Emergen
    review card offers **Call now** and **Cancel**, and the workflow waits at `awaiting_call`.
 2. **Call.** The Orchestrator claims the **Call now** press once per workflow, then sends a
    `phase="call"` task. The Dispatcher also claims the call once per workflow and places exactly
-   one ElevenLabs Twilio outbound call to `EMERGENCY_DEMO_TO_NUMBER`. It is never retried. The
+   one ElevenLabs outbound call (Twilio or SIP trunk, set by `ELEVENLABS_TELEPHONY`) to
+   `EMERGENCY_DEMO_TO_NUMBER`. It is never retried. The
    call card (status `called`) offers **Check the call**.
 3. **Status.** **Check the call** sends a `phase="status"` task. The Dispatcher reads the call's
    status, duration, summary, and transcript from ElevenLabs, and the Orchestrator shows them.

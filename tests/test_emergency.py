@@ -9,6 +9,7 @@ import pytest
 from resourcepilot.emergency import (
     ELEVENLABS_API,
     OUTBOUND_CALL_PATH,
+    OUTBOUND_CALL_PATHS,
     DemoCallConfig,
     blocked_reason,
     call_preview,
@@ -64,6 +65,16 @@ class FakeElevenLabs:
                     "message": "ok",
                     "conversation_id": "conv_123",
                     "callSid": "CA123",
+                },
+            )
+        if request.url.path == OUTBOUND_CALL_PATHS["sip_trunk"]:
+            return httpx.Response(
+                self.status,
+                json={
+                    "success": True,
+                    "message": "ok",
+                    "conversation_id": "conv_123",
+                    "sip_call_id": "sip-abc",
                 },
             )
         return httpx.Response(
@@ -147,6 +158,13 @@ def test_config_only_talks_to_elevenlabs() -> None:
     assert load_config({**ENV, "ELEVENLABS_API_BASE": "https://api.us.elevenlabs.io"}).api_base
 
 
+def test_config_picks_twilio_or_sip_trunk_only() -> None:
+    assert config().telephony == "twilio"
+    assert load_config({**ENV, "ELEVENLABS_TELEPHONY": "SIP_Trunk"}).telephony == "sip_trunk"
+    with pytest.raises(ValueError):
+        load_config({**ENV, "ELEVENLABS_TELEPHONY": "https://evil.example.com"})
+
+
 def test_config_repr_hides_key_and_number() -> None:
     text = repr(config()) + str(config())
     assert API_KEY not in text and DEMO_NUMBER not in text
@@ -206,6 +224,33 @@ async def test_place_call_dials_only_the_configured_number() -> None:
     assert client_data["dynamic_variables"]["location"] == "Powell Library, 2nd floor"
     assert "demo drill" in client_data["conversation_config_override"]["agent"]["first_message"]
     assert DEMO_NUMBER not in json.dumps(call)
+
+
+async def test_place_call_over_sip_trunk_uses_the_sip_endpoint() -> None:
+    fake = FakeElevenLabs()
+    settings = load_config({**ENV, "ELEVENLABS_TELEPHONY": "sip_trunk"})
+    call = await place_demo_call(fake.http(), settings, emergency_brief(FORM))
+    assert call["call_sid"] == "sip-abc" and call["status"] == "calling"
+    (request,) = fake.requests
+    body = json.loads(request.content)
+    assert str(request.url) == ELEVENLABS_API + OUTBOUND_CALL_PATHS["sip_trunk"]
+    assert body["to_number"] == DEMO_NUMBER and body["agent_phone_number_id"] == "phnum_demo"
+    assert "demo drill" in json.dumps(body["conversation_initiation_client_data"])
+
+
+async def test_refused_call_shows_the_reason_without_numbers() -> None:
+    message = (
+        "Unable to create record: trial accounts have limited parameter access. "
+        "To +1 (310) 555-0142 from 4089314099 with key test-elevenlabs-key"
+    )
+    fake = FakeElevenLabs(body={"success": False, "message": message})
+    with pytest.raises(ProviderError) as error:
+        await place_demo_call(fake.http(), config(), emergency_brief(FORM))
+    text = str(error.value)
+    assert "trial accounts have limited parameter access" in text
+    assert "0142" not in text and "4089314099" not in text and "[number removed]" in text
+    assert API_KEY not in text
+    assert len(text) < 300
 
 
 @pytest.mark.parametrize(

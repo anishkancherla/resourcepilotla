@@ -2,7 +2,8 @@
 
 This is a demo drill, never a real emergency call. ResourcePilot asks an ElevenLabs voice agent
 to phone one pre-configured demo contact (a teammate playing the dispatcher) through the
-ElevenLabs Twilio outbound-call API, and the voice describes the emergency the student entered.
+ElevenLabs outbound-call API, over either a Twilio number or a SIP trunk (for example a Telnyx
+trial), and the voice describes the emergency the student entered.
 
 Safety rules, all enforced here rather than in the dashboard:
 
@@ -15,7 +16,8 @@ Safety rules, all enforced here rather than in the dashboard:
 - A workflow places at most one call, and a failed request is never retried, so one button press
   can never dial twice.
 - Free text is trimmed, length-capped, and stripped of email addresses before it is sent.
-- Errors never include the API key, the full phone number, or raw response bodies.
+- Errors never include the API key, a phone number, or raw response bodies. When ElevenLabs
+  explains a refused call, its short reason is shown with every phone number removed.
 """
 
 from __future__ import annotations
@@ -32,7 +34,12 @@ from resourcepilot.http import Http, ProviderError, api_timeout
 
 PROVIDER = "ElevenLabs"
 ELEVENLABS_API = "https://api.elevenlabs.io"
-OUTBOUND_CALL_PATH = "/v1/convai/twilio/outbound-call"
+# ElevenLabs places the call through whichever telephony the imported number uses.
+OUTBOUND_CALL_PATHS = {
+    "twilio": "/v1/convai/twilio/outbound-call",
+    "sip_trunk": "/v1/convai/sip-trunk/outbound-call",
+}
+OUTBOUND_CALL_PATH = OUTBOUND_CALL_PATHS["twilio"]
 CONVERSATION_PATH = "/v1/convai/conversations/"
 MAX_RESPONSE_BYTES = 512 * 1024
 CALL_TIMEOUT_SECONDS = 15.0
@@ -57,6 +64,7 @@ MAX_SCHOOL = 120
 MAX_PEOPLE = 50
 MAX_TRANSCRIPT_LINES = 40
 MAX_TRANSCRIPT_LINE = 300
+MAX_REASON = 200
 
 REQUIRED_ENV = (
     "ELEVENLABS_API_KEY",
@@ -88,6 +96,7 @@ BLOCKED_NUMBERS = frozenset(
 EMAIL = re.compile(r"[\w.+-]+@[\w-]+(?:\.[\w-]+)+")
 CONTROL = re.compile(r"[\x00-\x1f\x7f]")
 CONVERSATION_ID = re.compile(r"^[A-Za-z0-9_-]{1,128}$")
+PHONE_LIKE = re.compile(r"\+?\d[\d\s().-]{5,}\d")
 NANP = re.compile(r"^\+1([2-9]\d\d)([2-9]\d\d)\d{4}$")
 CALL_STATUSES = {
     "initiated": "Dialing",
@@ -113,6 +122,7 @@ class DemoCallConfig:
     phone_number_id: str
     to_number: str
     api_base: str = ELEVENLABS_API
+    telephony: str = "twilio"
 
     def __repr__(self) -> str:
         return f"DemoCallConfig(agent_id={self.agent_id!r}, to={mask_number(self.to_number)!r})"
@@ -168,6 +178,9 @@ def load_config(env: Mapping[str, str] | None = None) -> DemoCallConfig:
     reason = blocked_reason(to_number)
     if reason:
         raise ValueError(f"EMERGENCY_DEMO_TO_NUMBER is refused: {reason}")
+    telephony = str(values.get("ELEVENLABS_TELEPHONY", "") or "twilio").strip().lower()
+    if telephony not in OUTBOUND_CALL_PATHS:
+        raise ValueError("ELEVENLABS_TELEPHONY must be twilio or sip_trunk")
     api_base = str(values.get("ELEVENLABS_API_BASE", "") or ELEVENLABS_API).rstrip("/")
     if not re.fullmatch(r"https://api(?:\.[a-z]+)*\.elevenlabs\.io", api_base):
         raise ValueError(
@@ -179,6 +192,7 @@ def load_config(env: Mapping[str, str] | None = None) -> DemoCallConfig:
         phone_number_id=values["ELEVENLABS_PHONE_NUMBER_ID"].strip(),
         to_number=to_number,
         api_base=api_base,
+        telephony=telephony,
     )
 
 
@@ -190,6 +204,11 @@ def clean_text(value: Any, limit: int) -> str:
     if len(text) > limit:
         text = text[: limit - 1].rstrip() + "\u2026"
     return text
+
+
+def provider_reason(value: Any) -> str:
+    """ElevenLabs' short explanation for a refused call, with phone numbers removed."""
+    return PHONE_LIKE.sub("[number removed]", clean_text(value, MAX_REASON))
 
 
 def emergency_brief(form: Mapping[str, Any], *, school: str = "") -> dict[str, Any]:
@@ -329,20 +348,25 @@ async def place_demo_call(
     data = await _send(
         http,
         "POST",
-        config.api_base + OUTBOUND_CALL_PATH,
+        config.api_base + OUTBOUND_CALL_PATHS[config.telephony],
         config,
         body=outbound_request(brief, config),
         timeout_seconds=CALL_TIMEOUT_SECONDS,
     )
     if not isinstance(data, dict) or data.get("success") is not True:
-        raise ProviderError(f"{PROVIDER} could not start the call")
+        reason = provider_reason(data.get("message")) if isinstance(data, dict) else ""
+        if config.api_key:
+            reason = reason.replace(config.api_key, "[key removed]")
+        raise ProviderError(
+            f"{PROVIDER} could not start the call" + (f" ({reason})" if reason else "")
+        )
     conversation_id = str(data.get("conversation_id") or "")
     if conversation_id and not CONVERSATION_ID.fullmatch(conversation_id):
         raise ProviderError(f"{PROVIDER} returned an unexpected response")
     return {
         "status": "calling",
         "conversation_id": conversation_id,
-        "call_sid": clean_text(data.get("callSid"), 64),
+        "call_sid": clean_text(data.get("callSid") or data.get("sip_call_id"), 64),
         "to": mask_number(config.to_number),
         "opening": first_message(brief),
     }

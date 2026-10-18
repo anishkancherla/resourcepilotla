@@ -14,7 +14,7 @@ Before recording:
 5. For the optional emergency step, finish the setup in
    [agents/emergency/README.md](../agents/emergency/README.md) and set `EMERGENCY_DEMO_TO_NUMBER`
    to a teammate's phone. Place one test call the day before. Each call is billed to your
-   ElevenLabs and Twilio accounts. Skip the step if this is not set up.
+   ElevenLabs and phone-provider accounts. Skip the step if this is not set up.
 
 The optional steps add about a minute.
 

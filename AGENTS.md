@@ -109,7 +109,10 @@ official pages in [docs/official-links.md](docs/official-links.md) for anything 
 - Cards show only the last four digits of the number. Every emergency card says it is a demo drill
   that does not contact 911 or campus police, and "In a real emergency, call 911."
 - Never log, show, or put in an error the ElevenLabs API key, the full number, or a raw response
-  body.
+  body. A refused call may show ElevenLabs' short `message`, cleaned, capped, and with phone
+  numbers and the key removed.
+- `ELEVENLABS_TELEPHONY` only picks the ElevenLabs endpoint (`twilio` or `sip_trunk`); it never
+  changes who is called.
 - Only the Emergency Dispatcher talks to ElevenLabs, over https to `api.elevenlabs.io` or
   `api.<region>.elevenlabs.io`.
 - Never claim a live call was tested or demonstrated without real evidence. The tests mock

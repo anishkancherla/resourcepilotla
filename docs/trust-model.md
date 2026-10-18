@@ -113,7 +113,7 @@ an arbitrary URL.
 
 The emergency service is a demo drill. It never calls 911, campus police, or any emergency
 service. The Emergency Dispatcher asks an ElevenLabs voice agent to phone one demo contact, a
-teammate playing the dispatcher, over the user's own Twilio number. The rules are enforced in
+teammate playing the dispatcher, over the user's own Twilio number or SIP trunk. The rules are enforced in
 [resourcepilot/emergency.py](../resourcepilot/emergency.py), not in a dashboard:
 
 - **One destination.** The Dispatcher dials only `EMERGENCY_DEMO_TO_NUMBER`. Nothing in a chat
@@ -160,6 +160,7 @@ teammate playing the dispatcher, over the user's own Twilio number. The rules ar
   system behind a sign-in or JavaScript-only navigation gets the paste-link card.
 - IPEDS facts are the 2022 survey year. Prices and capacity change, so check current figures with
   the school.
-- The demo call depends on the user's own ElevenLabs and Twilio setup, and both bill each call to
-  the user's accounts. A Twilio trial account can call only verified numbers. The tests mock
+- The demo call depends on the user's own ElevenLabs and phone-provider setup, and both bill each
+  call to the user's accounts. A Twilio trial account can't place ElevenLabs calls at all, and a
+  Telnyx trial can call only its one verified number. The tests mock
   ElevenLabs, so no test places a real call, and live calls were not part of the automated tests.

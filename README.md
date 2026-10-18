@@ -9,7 +9,7 @@ short forms, with a card for every reply.
 | **Study rooms** | Real open library study rooms at your school, re-checked live, then a free booking link. You book with your own sign-in. | Live: your school's LibCal, found by the Campus Researcher |
 | **Health & wellness** | Open meditation, reflection, and sensory rooms at your school, the week's health and wellness events with RSVP links, and the 988 crisis line on every card | Live: your school's LibCal and its public Localist events calendar |
 | **Campus housing** | Every on-campus hall your school lists, with its photo, style, who it's for, features, and listed price, matched to what you need, plus IPEDS facts and the apply link | Live: the school's own housing pages plus IPEDS |
-| **Emergency (demo)** | A demo-drill phone call that describes an emergency to your team's demo contact, never 911, then the call's summary and transcript | ElevenLabs voice agent over your own Twilio number |
+| **Emergency (demo)** | A demo-drill phone call that describes an emergency to your team's demo contact, never 911, then the call's summary and transcript | ElevenLabs voice agent over your own Twilio number or SIP trunk (e.g. Telnyx) |
 | **My bookings** | Your recent re-checked rooms and their booking links | ResourcePilot's workflow records |
 
 Study rooms work for **any US school**, not only one campus. You enter your school email. Intake
@@ -207,7 +207,7 @@ The 988 line on the wellness card is static text, not a referral service.
 
 The emergency feature never calls 911, campus police, or any emergency service. It is a demo drill
 that phones one teammate's phone, set in `EMERGENCY_DEMO_TO_NUMBER`. Live calls were not part of
-the automated tests, which mock ElevenLabs; a live call needs your own ElevenLabs and Twilio setup,
+the automated tests, which mock ElevenLabs; a live call needs your own ElevenLabs and phone-provider setup,
 and both bill calls to your accounts. In a real emergency, call 911.
 
 Wellness rooms are found only when a school lists them in LibCal under names such as meditation,

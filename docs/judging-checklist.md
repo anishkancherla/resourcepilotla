@@ -58,7 +58,7 @@ Capture real evidence for each item. Do not claim an item until you have it.
       apply for housing.
 - [ ] Be honest about the emergency demo: it never calls 911 or any emergency service, it phones
       one teammate's demo number, and the tests mock ElevenLabs. Claim a live call only if you
-      recorded one with your own ElevenLabs and Twilio setup.
+      recorded one with your own ElevenLabs and phone-provider setup.
 
 ## Keeps operating after the event
 

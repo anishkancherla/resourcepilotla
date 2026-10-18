@@ -59,4 +59,4 @@ browser:
 - profile ownership
 - Mailbox approval
 - publishing a shared chat
-- the ElevenLabs agent, the Twilio number, and the demo contact's phone
+- the ElevenLabs agent, the Twilio or Telnyx number, and the demo contact's phone
