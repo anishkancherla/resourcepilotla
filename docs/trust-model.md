@@ -54,6 +54,14 @@ and portal links itself, under the same fetch rules, and drops any that no longe
 card names any link it dropped. ResourcePilot never applies for, reserves, or pays for
 housing.
 
+The Researcher also reads each hall from the school's own housing pages. A hall page is
+untrusted text: only a capped name, a photo that is https on the school's domain, style, who it is
+for, room types, listed features, the listed price, and a short "about" line are kept. An "about"
+line with an email address, a link, or instruction-like words is skipped. Menus, headers, and
+footers are removed first, so site-wide words cannot tag every hall. Verification re-opens every
+hall page itself. The Planner rules a hall out only on its own page's words; anything a page does
+not say is shown as "not listed", never guessed.
+
 ## 5. Reading the public web safely
 
 The Campus Researcher, Verification's housing link and events feed re-checks, Campus Rooms, and

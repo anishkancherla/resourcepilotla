@@ -88,10 +88,14 @@ def test_room_day_range_matches_the_form() -> None:
         )
 
 
-def test_housing_needs_only_the_school() -> None:
+def test_housing_needs_the_school_and_defaults_the_criteria() -> None:
     assert housing_brief({"school_domain": "purdue.edu", "day": "ignored"}) == {
         "service": "housing",
         "school_domain": "purdue.edu",
+        "who": "first_year",
+        "style": "any",
+        "must_haves": [],
+        "max_budget_cents": 0,
     }
     with pytest.raises(ValueError, match="housing office"):
         housing_brief({})

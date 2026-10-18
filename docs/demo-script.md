@@ -70,10 +70,13 @@ The crisis line is static, so it shows even when a school has nothing to find."
 
 ## 5. Campus housing (25 s)
 
-Press **Menu**, then **Open campus housing**, and enter the same email. The card shows IPEDS facts
-(dorm beds, typical room and board, meal plans), the housing office, and the application portal.
-Point at **Sources**: "Verification re-opened each official link itself. You apply on the school's
-site."
+Press **Menu**, then **Open campus housing**. Enter a Purdue, Georgia Tech, or UC Riverside email,
+pick **Incoming first-year**, tick **Air conditioning**, and press **Find housing**. The carousel
+shows each hall the school lists, matches first, with photos where the school has them. Open one:
+style, who it's for, rooms, features, price, and how it fits each criterion, with the apply link.
+Say: "Every detail comes from the hall's own page, re-opened by Verification. If the page doesn't
+say, it shows 'not listed'. You apply on the school's site." Press **Show all** to see the halls
+your criteria ruled out, and **Housing facts** for IPEDS numbers and the portal.
 
 ## 6. Optional: Emergency (demo) (30 s)
 

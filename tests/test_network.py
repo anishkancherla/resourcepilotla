@@ -254,10 +254,67 @@ async def test_wellness_explains_a_libcal_without_wellness_rooms(network) -> Non
     assert next(iter(network.store.workflows.values()))["status"] == "awaiting_selection"
 
 
-async def test_housing_flow_shows_facts_and_rechecked_links(network) -> None:
-    await network.send_user(
-        chat({"action": "submit_form", "service": "housing", "email": f"{EMAIL_USER}@purdue.edu"})
+def housing_form(domain: str = "purdue.edu", **fields: str) -> dict:
+    return {
+        "action": "submit_form",
+        "service": "housing",
+        "email": f"{EMAIL_USER}@{domain}",
+        **fields,
+    }
+
+
+async def test_housing_shows_each_hall_matched_to_the_criteria(network) -> None:
+    await network.send_user(chat(housing_form(who="first_year", need_ac="true")))
+    assert completed_roles(network) == ["intake", "researcher", "verification", "planner"]
+    _, carousel, narration = last_card(network, "carousel")
+    assert carousel["title"] == "On-campus housing at Purdue University-Main Campus"
+    assert "matches first" in narration
+    titles = [item["title"] for item in carousel["items"]]
+    # Hillenbrand (upperclass) and Meredith South (graduate) are ruled out by their own pages.
+    assert titles == ["Earhart", "Show all 3 halls", "Housing facts and how to apply"]
+    earhart = carousel["items"][0]
+    assert earhart["badges"][0] == {"label": "Matches", "variant": "success"}
+    assert earhart["secondary_text"] == "Price not listed on the hall's page"
+
+    await network.send_user(chat(earhart["primary_cta"]["selection"]))
+    _, detail, _ = last_card(network, "detail")
+    assert detail["title"] == "Earhart"
+    rows = {row["label"]: row["value"] for row in detail["summary_rows"]}
+    assert rows["Style"] == "Traditional hall"
+    assert rows["Your criteria · Air conditioning"] == "Fits"
+    assert rows["Apply"].startswith("https://purdue.starrezhousing.com/StarRezPortalX/")
+    assert "never applies" in rows["Apply"]
+
+    await network.send_user(chat(carousel["items"][1]["primary_cta"]["selection"]))
+    _, everything, _ = last_card(network, "carousel")
+    by_title = {item["title"]: item for item in everything["items"]}
+    assert by_title["Hillenbrand Hall"]["badges"][0]["label"] == "Doesn't fit: Who it's for"
+    assert (
+        by_title["Hillenbrand Hall"]["image"] == "https://housing.purdue.edu/images/hillenbrand.jpg"
     )
+    assert "From $4,512 per semester" in by_title["Hillenbrand Hall"]["secondary_text"]
+    assert "image" not in by_title["Meredith South"]  # its photo was off the school's domain
+    assert "attacker" not in json.dumps(network.cards())
+
+    await network.send_user(chat(carousel["items"][-1]["primary_cta"]["selection"]))
+    _, facts, _ = last_card(network, "detail")
+    assert facts["title"].startswith("Housing at Purdue")
+    assert next(iter(network.store.workflows.values()))["status"] == "answered"
+    assert EMAIL_USER not in dumps([network.store.workflows, network.store.events])
+
+
+async def test_school_without_readable_halls_gets_facts_and_links(network) -> None:
+    await network.send_user(chat(housing_form("mit.edu")))
+    _, card, _ = last_card(network, "detail")
+    rows = {row["label"]: row["value"] for row in card["summary_rows"]}
+    assert rows["Halls"].startswith("Couldn't read individual halls")
+    assert completed_roles(network) == ["intake", "researcher", "verification", "planner"]
+
+
+async def test_housing_flow_shows_facts_and_rechecked_links(network) -> None:
+    await network.send_user(chat(housing_form()))
+    _, carousel, _ = last_card(network, "carousel")
+    await network.send_user(chat(carousel["items"][-1]["primary_cta"]["selection"]))
     _, card, _ = last_card(network, "detail")
     assert card["title"] == "Housing at Purdue University-Main Campus · West Lafayette, IN"
     rows = {row["label"]: row["value"] for row in card["summary_rows"]}
@@ -265,7 +322,7 @@ async def test_housing_flow_shows_facts_and_rechecked_links(network) -> None:
     assert rows["Housing office"] == "https://housing.purdue.edu/"
     assert rows["Apply · My Housing portal"] == "https://purdue.starrezhousing.com/StarRezPortalX/"
     assert "Links re-checked live by Verification" in rows["Sources"]
-    assert completed_roles(network) == ["intake", "researcher", "verification"]
+    assert completed_roles(network) == ["intake", "researcher", "verification", "planner"]
     assert next(iter(network.store.workflows.values()))["status"] == "answered"
 
 

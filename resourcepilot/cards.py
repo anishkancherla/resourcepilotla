@@ -25,6 +25,9 @@ from uuid import uuid4
 from uagents_core.contrib.protocols.chat import ChatMessage, MetadataContent, TextContent
 
 from resourcepilot.intake import (
+    HOUSING_FEATURES,
+    HOUSING_STYLES,
+    HOUSING_WHO,
     ROOM_DURATIONS,
     WELLNESS_DURATIONS,
     describe_window,
@@ -80,6 +83,9 @@ KNOWN_ACTIONS = (
     "recheck_room",
     "show_results",
     "submit_link",
+    "view_housing",
+    "show_housing_facts",
+    "show_all_housing",
     "place_call",
     "call_status",
     "open_orchestrator",
@@ -527,11 +533,26 @@ def emergency_form() -> tuple[str, dict[str, Any]]:
 
 
 def housing_form() -> tuple[str, dict[str, Any]]:
+    """The school plus the criteria the Planner matches each hall against."""
+    must_haves = [
+        {"name": f"need_{key}", "kind": "checkbox", "label": label}
+        for key, label in HOUSING_FEATURES.items()
+    ]
     return "form", {
-        "title": "Housing at your school",
-        "fields": [_email_field()],
+        "title": "On-campus housing at your school",
+        "fields": [
+            _email_field(),
+            _select("who", "I am a", list(HOUSING_WHO.items()), required=True),
+            _select("style", "Housing style", list(HOUSING_STYLES.items())),
+            *must_haves,
+            {
+                "name": "max_budget",
+                "kind": "number",
+                "label": "Max yearly budget, USD",
+            },
+        ],
         "submit_cta": {
-            "label": "Look up housing",
+            "label": "Find housing",
             "selection": {"action": "submit_form", "service": "housing"},
         },
     }
@@ -774,6 +795,15 @@ def housing_card(state_data: dict[str, Any]) -> tuple[str, dict[str, Any]]:
             "applies or pays for housing.",
         }
     )
+    if housing.get("options_status") == "not_found":
+        school_name = school.get("school_name") or "your school"
+        rows.append(
+            {
+                "label": "Halls",
+                "value": f"Couldn't read individual halls from {school_name}'s site. "
+                "The housing office lists them.",
+            }
+        )
     sources = [housing.get("facts_source") or "", "Links re-checked live by Verification"]
     if housing.get("unverified"):
         sources.append(f"Dropped links that did not open: {', '.join(housing['unverified'])}")
@@ -794,6 +824,223 @@ def housing_card(state_data: dict[str, Any]) -> tuple[str, dict[str, Any]]:
             {"label": "Start over", "selection": {"action": "start_over"}},
         ],
     }
+
+
+CHECK_LABELS = {
+    "who": "Who it's for",
+    "style": "Style",
+    "budget": "Budget",
+    **HOUSING_FEATURES,
+}
+STYLE_NAMES = {"traditional": "Traditional hall", "suite": "Suite", "apartment": "Apartment"}
+WHO_NAMES = {
+    "first_year": "First-year",
+    "transfer": "Transfer",
+    "continuing": "Continuing",
+    "graduate": "Graduate",
+    "family": "Families",
+}
+FEATURE_SHORT = {
+    "ac": "A/C",
+    "kitchen": "Kitchen",
+    "private_bath": "Private bath",
+    "gender_inclusive": "Gender-inclusive",
+    "accessible": "Accessible",
+}
+
+
+def _usd(cents: int) -> str:
+    return f"${cents // 100:,}"
+
+
+def hall_price(hall: dict[str, Any]) -> str:
+    """How the hall's own page states its price, with a yearly figure to compare halls."""
+    label, yearly = str(hall.get("price_label") or ""), int(hall.get("yearly_cents") or 0)
+    if not label or not yearly:
+        return "Price not listed on the hall's page"
+    if label.endswith(("year", "academic year")):
+        return f"From {label}"
+    return f"From {label} (about {_usd(yearly)} a year)"
+
+
+def _hall_subtitle(hall: dict[str, Any]) -> str:
+    style = STYLE_NAMES.get(str(hall.get("style") or ""), "Style not listed")
+    who = ", ".join(WHO_NAMES[key] for key in hall.get("who") or [] if key in WHO_NAMES)
+    return f"{style} · {who}" if who else style
+
+
+def _hall_badges(hall: dict[str, Any]) -> list[dict[str, str]]:
+    if hall.get("ruled_out"):
+        names = ", ".join(CHECK_LABELS.get(key, key) for key in hall["ruled_out"])
+        badges = [{"label": f"Doesn't fit: {names}"[:40], "variant": "warning"}]
+    elif hall.get("unknown"):
+        names = ", ".join(
+            FEATURE_SHORT.get(key, CHECK_LABELS.get(key, key)) for key in hall["unknown"]
+        )
+        badges = [{"label": f"Not listed: {names}"[:40], "variant": "warning"}]
+    else:
+        badges = [{"label": "Matches", "variant": "success"}]
+    badges.extend(
+        {"label": FEATURE_SHORT[key], "variant": "info"}
+        for key in hall.get("features") or []
+        if key in FEATURE_SHORT
+    )
+    return badges[:4]
+
+
+def housing_carousel(
+    workflow_id: str, data: dict[str, Any], *, show_all: bool = False
+) -> tuple[str, dict[str, Any]]:
+    """Every hall the Planner kept (or all of them), plus two items for facts and the full list."""
+    school = str(data.get("school", {}).get("school_name") or "your school")
+    halls = list(data.get("all_halls" if show_all else "halls") or [])
+    items: list[dict[str, Any]] = []
+    for hall in halls:
+        item: dict[str, Any] = {
+            "id": str(hall["option_id"]),
+            "title": str(hall["name"]),
+            "subtitle": _hall_subtitle(hall),
+            "secondary_text": hall_price(hall),
+            "badges": _hall_badges(hall),
+            "primary_cta": {
+                "label": "View hall",
+                "selection": {
+                    "action": "view_housing",
+                    "workflow_id": workflow_id,
+                    "option_id": str(hall["option_id"]),
+                },
+            },
+        }
+        if hall.get("photo"):
+            item["image"] = str(hall["photo"])
+        items.append(item)
+    hidden = int(data.get("hidden_count") or 0)
+    if hidden and not show_all:
+        items.append(
+            {
+                "id": "show_all",
+                "title": f"Show all {len(data.get('all_halls') or [])} halls",
+                "subtitle": f"{hidden} hidden because their page rules out your criteria",
+                "primary_cta": {
+                    "label": "Show all",
+                    "selection": {"action": "show_all_housing", "workflow_id": workflow_id},
+                },
+            }
+        )
+    items.append(
+        {
+            "id": "housing_facts",
+            "title": "Housing facts and how to apply",
+            "subtitle": "Dorm beds, typical costs, the housing office, and its application portal",
+            "primary_cta": {
+                "label": "Housing facts",
+                "selection": {"action": "show_housing_facts", "workflow_id": workflow_id},
+            },
+        }
+    )
+    housing = dict(data.get("housing") or {})
+    facts = dict(housing.get("facts") or [])
+    beds = (
+        f"{facts['Dorm beds']} dorm beds · "
+        if facts.get("Dorm beds", "").replace(",", "").isdigit()
+        else ""
+    )
+    return "carousel", {
+        "title": f"On-campus housing at {school}",
+        "subtitle": (
+            f"{beds}{len(halls)} option{'s' if len(halls) != 1 else ''} from the school's own "
+            "pages, matches first. You apply on the school's site."
+        ),
+        "items": items,
+    }
+
+
+def housing_detail(
+    workflow_id: str, hall: dict[str, Any], data: dict[str, Any]
+) -> tuple[str, dict[str, Any]]:
+    """One hall as its own page describes it, how it fits the criteria, and where to apply."""
+    housing = dict(data.get("housing") or {})
+    rows = [
+        {"label": "Style", "value": STYLE_NAMES.get(str(hall.get("style") or ""), "Not listed")},
+        {
+            "label": "Who it's for",
+            "value": ", ".join(WHO_NAMES[key] for key in hall.get("who") or [] if key in WHO_NAMES)
+            or "Not listed",
+        },
+        {
+            "label": "Rooms",
+            "value": ", ".join(room.title() for room in hall.get("rooms") or []) or "Not listed",
+        },
+        {
+            "label": "Features",
+            "value": ", ".join(HOUSING_FEATURES[key] for key in hall.get("features") or [])
+            or "None listed",
+        },
+        {"label": "Price", "value": hall_price(hall)},
+    ]
+    if hall.get("about"):
+        rows.append({"label": "About", "value": str(hall["about"])})
+    for key, value in (hall.get("checks") or {}).items():
+        verdict = {
+            "match": "Fits",
+            "unknown": "Not listed on the hall's page",
+            "out": "Doesn't fit",
+        }
+        rows.append(
+            {"label": f"Your criteria · {CHECK_LABELS.get(key, key)}", "value": verdict[value]}
+        )
+    rows.append({"label": "Official page", "value": str(hall["url"])})
+    apply_url = str(housing.get("portal_url") or housing.get("office_url") or "")
+    rows.append(
+        {
+            "label": "Apply",
+            "value": (
+                f"{apply_url}: apply on your school's site with your own sign-in. "
+                if apply_url
+                else "Apply through your school's housing office. "
+            )
+            + "ResourcePilot never applies for, reserves, or pays for housing.",
+        }
+    )
+    rows.append(
+        {"label": "Source", "value": "Read from the hall's page and re-opened by Verification"}
+    )
+    payload: dict[str, Any] = {
+        "title": str(hall["name"]),
+        "summary_rows": rows,
+        "ctas": [
+            {
+                "label": "Back to halls",
+                "primary": True,
+                "selection": {"action": "show_status", "workflow_id": workflow_id},
+            },
+            {
+                "label": "Housing facts",
+                "selection": {"action": "show_housing_facts", "workflow_id": workflow_id},
+            },
+            {"label": "Start over", "selection": {"action": "start_over"}},
+        ],
+    }
+    if hall.get("photo"):
+        payload = {"title": payload["title"], "hero_image": str(hall["photo"]), **payload}
+    return "detail", payload
+
+
+def no_housing_match_card(workflow_id: str, data: dict[str, Any]) -> tuple[str, dict[str, Any]]:
+    total = len(data.get("all_halls") or [])
+    school = str(data.get("school", {}).get("school_name") or "your school")
+    return notice_card(
+        f"No hall at {school} fits",
+        f"ResourcePilot read {total} halls from {school}'s site, and each one's page rules out at "
+        "least one of your criteria. See them all, or change your criteria.",
+        badge="No match",
+        variant="warning",
+        buttons=[
+            ("Show all halls", {"action": "show_all_housing", "workflow_id": workflow_id}),
+            ("Change criteria", {"action": "open_service", "service": "housing"}),
+            ("Housing facts", {"action": "show_housing_facts", "workflow_id": workflow_id}),
+        ],
+    )
 
 
 def wellness_card(workflow_id: str, data: dict[str, Any]) -> tuple[str, dict[str, Any]]:

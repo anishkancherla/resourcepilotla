@@ -95,6 +95,7 @@ LIBRARY_STARTS = (
 HOUSING_STARTS = (
     "https://housing.{d}/",
     "https://reslife.{d}/",
+    "https://hdh.{d}/",
     "https://www.housing.{d}/",
     "https://www.{d}/housing/",
     "https://{d}/housing/",
@@ -675,7 +676,7 @@ async def find_room_system(http: Http, domain: str, *, budget: Budget | None = N
 async def find_housing_pages(
     http: Http, domain: str, *, budget: Budget | None = None
 ) -> dict[str, str]:
-    cache_key = f"research:housing:{domain}:v1"
+    cache_key = f"research:housing:{domain}:v2"
     if http.cache is not None:
         cached = await http.cache.cache_get(cache_key)
         if isinstance(cached, dict):
@@ -961,13 +962,25 @@ async def research(payload: dict[str, Any], http: Http, *, now: datetime) -> dic
     school = await lookup_school(http, str(brief["school_domain"]))
     out: dict[str, Any] = {**payload, "school": school}
     if service == "housing":
+        # Imported here: the housing scraper is built on this module's fetch rules.
+        from resourcepilot.housing import find_housing_options
+
         pages = await find_housing_pages(http, school["domain"])
         try:
             facts = await housing_characteristics(http, school["unitid"])
         except ProviderError:
             facts = []
-        out["housing"] = {**pages, "facts": facts, "facts_source": IPEDS_SOURCE if facts else ""}
-        if not facts and not pages["office_url"]:
+        halls = await find_housing_options(http, school["domain"], pages["office_url"])
+        out["housing"] = {
+            **pages,
+            "facts": facts,
+            "facts_source": IPEDS_SOURCE if facts else "",
+            "options_status": halls["status"],
+            "listing_url": halls["listing_url"],
+            "options": halls["options"],
+            "options_evidence": halls["evidence"],
+        }
+        if not facts and not pages["office_url"] and not halls["options"]:
             raise ValueError(
                 f"No housing facts or housing office found for {school['school_name']}"
             )

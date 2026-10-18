@@ -6,8 +6,9 @@ institution in IPEDS, then finds the library's room-booking system. It checks a 
 list first, then probes `<school>.libcal.com`. Failing both, it crawls the library's own site,
 following room-booking links and recognizing LibCal, EMS, 25Live, Skedda, and Robin. If it finds
 nothing it asks the student for the link instead of guessing, and checks that link the same way.
-For housing it finds the housing office and application portal and reads IPEDS dorm beds,
-typical room and board, and meal plans. For wellness it finds the room system the same way but
+For housing it finds the housing office and application portal, reads IPEDS dorm beds, typical
+room and board, and meal plans, and reads every hall the school lists from its own housing pages:
+name, photo, style, who it's for, room types, features, listed price, and a short description. For wellness it finds the room system the same way but
 never pauses for a link, and it finds the school's public Localist events calendar on
 `events.<domain>`, `calendar.<domain>`, or a `<school>.localist.com` site that links back to the
 school, keeping the week's health and wellness events. A school without one is told so; nothing is

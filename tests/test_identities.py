@@ -110,7 +110,7 @@ def test_service_chains_use_real_specialists() -> None:
     assert SERVICE_CHAINS == {
         "rooms": ("intake", "researcher", "campus_rooms", "verification", "planner"),
         "wellness": ("intake", "researcher", "campus_rooms", "verification", "planner"),
-        "housing": ("intake", "researcher", "verification"),
+        "housing": ("intake", "researcher", "verification", "planner"),
         "emergency": ("emergency",),
     }
     assert SPECIALISTS == {
@@ -130,7 +130,10 @@ def test_service_chain_falls_back_to_rooms() -> None:
         "intake",
         "researcher",
         "verification",
+        "planner",
     )
+    no_rooms = {"rooms": {"status": "needs_link"}}
+    assert service_chain("wellness", no_rooms) == ("intake", "researcher", "verification")
     assert service_chain("bundle") == SERVICE_CHAINS["rooms"]
     assert service_chain("unknown", None) == SERVICE_CHAINS["rooms"]
 

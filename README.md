@@ -8,7 +8,7 @@ short forms, with a card for every reply.
 | --- | --- | --- |
 | **Study rooms** | Real open library study rooms at your school, re-checked live, then a free booking link. You book with your own sign-in. | Live: your school's LibCal, found by the Campus Researcher |
 | **Health & wellness** | Open meditation, reflection, and sensory rooms at your school, the week's health and wellness events with RSVP links, and the 988 crisis line on every card | Live: your school's LibCal and its public Localist events calendar |
-| **Campus housing** | Dorm beds, typical room and board, meal plans, your housing office, and its application portal, with each link re-checked | Live: IPEDS plus the school's own housing site |
+| **Campus housing** | Every on-campus hall your school lists, with its photo, style, who it's for, features, and listed price, matched to what you need, plus IPEDS facts and the apply link | Live: the school's own housing pages plus IPEDS |
 | **Emergency (demo)** | A demo-drill phone call that describes an emergency to your team's demo contact, never 911, then the call's summary and transcript | ElevenLabs voice agent over your own Twilio number |
 | **My bookings** | Your recent re-checked rooms and their booking links | ResourcePilot's workflow records |
 
@@ -78,7 +78,7 @@ browser. See [docs/agentverse-deployment.md](docs/agentverse-deployment.md).
 | `researcher` | ResourcePilot Campus Researcher | Finds a school's room system, housing pages, and events feed from its email domain | Chat, Tasks | 8002 |
 | `campus_rooms` | ResourcePilot Campus Rooms | Reads open study and wellness rooms live and re-checks one before handing over its link | Chat, Tasks | 8003 |
 | `verification` | ResourcePilot Verification | Checks every room offer and re-opens housing links and event feeds before you see them | Chat, Tasks | 8004 |
-| `planner` | ResourcePilot Planner | Ranks open rooms and reroutes when a room is taken | Chat, Tasks | 8005 |
+| `planner` | ResourcePilot Planner | Ranks open rooms and matches campus housing to your criteria | Chat, Tasks | 8005 |
 | `memory_audit` | ResourcePilot Memory and Audit | Keeps the append-only audit timeline and your recent bookings | Chat, Tasks | 8006 |
 | `emergency` | ResourcePilot Emergency Dispatcher | Places one demo-drill call to your team's demo contact, never 911, and reports the transcript | Chat, Tasks | 8007 |
 
@@ -107,7 +107,8 @@ Wellness      Intake ─▶ Campus Researcher (room system + events feed) ─▶
               "View room" ─▶ the same live re-check and booking link as study rooms
               No room system: Intake ─▶ Campus Researcher ─▶ Verification ─▶ wellness card
 
-Housing       Intake ─▶ Campus Researcher ─▶ Verification (re-opens each link) ─▶ housing card
+Housing       Intake ─▶ Campus Researcher (reads each hall's page) ─▶ Verification (re-opens
+              each hall and link) ─▶ Planner (matches your criteria) ─▶ halls carousel ─▶ hall
 
 Emergency     Emergency Dispatcher (preview: checks the form) ─▶ review card
 (demo)        "Call now" ─▶ Emergency Dispatcher places one call to the demo contact ─▶ call card
@@ -131,8 +132,12 @@ recorded, unless all of these hold:
 3. When the offer has live times, its slot falls inside the window you asked for.
 4. When the room's seat count is known, it fits your group.
 
-For housing, Verification re-opens the housing office and application portal links itself and
-drops any that no longer open on the school's site. For wellness, it re-fetches the school's
+For housing, the form asks who you are (first-year, transfer, continuing, graduate, or family),
+the style you want, must-haves (A/C, kitchen, private bath, gender-inclusive, accessible), and an
+optional yearly budget. The Researcher reads each hall from the school's own housing pages,
+Verification re-opens every hall page and official link itself, and the Planner marks each
+criterion as a match, not listed, or ruled out by the hall's own page. Ruled-out halls are hidden
+behind **Show all**; halls whose pages don't say come after the matches. For wellness, it re-fetches the school's
 events feed itself and drops any event the feed no longer lists.
 
 The Campus Researcher reads only public pages over https, on your school's domain or a known
@@ -191,6 +196,9 @@ Postgres. CI does this.
 ResourcePilot takes no payments of any kind: there is no payment rail, no Stripe integration, no
 FET, and no escrow. It does not reserve study or wellness rooms, RSVP to events, or apply for,
 reserve, or pay for housing. It links you to your school's own site, where you sign in yourself.
+Hall details come from each school's own pages and only as far as those pages say: schools whose
+halls are not linked from the housing site, or are on a separate site, fall back to the housing
+facts and links, and prices appear only when a hall's page lists one.
 It never asks about your health, books health or counseling appointments, or gives health advice.
 The 988 line on the wellness card is static text, not a referral service.
 

@@ -143,7 +143,7 @@ def test_serialization_round_trip() -> None:
     assert TaskResult.parse_raw(result.json()) == result
 
 
-async def test_housing_chain_ends_answered_after_verification() -> None:
+async def test_housing_chain_ends_answered_after_the_planner() -> None:
     store = MemoryStore()
     task = await start(store, {"service": "housing", "fields": {"school_domain": "purdue.edu"}})
     intake = execute_specialist("intake", task)
@@ -152,7 +152,12 @@ async def test_housing_chain_ends_answered_after_verification() -> None:
     assert research is not None and research.target_role == "researcher"
     verify, _ = await accept_result(store, reply(research, {**research.payload, "housing": {}}))
     assert verify is not None and verify.target_role == "verification"
-    done, state = await accept_result(store, reply(verify, verify.payload))
+    plan, _ = await accept_result(store, reply(verify, verify.payload))
+    assert plan is not None and plan.target_role == "planner"
+    planned = execute_specialist("planner", plan)
+    assert planned.ok, planned.error
+    assert planned.payload["halls"] == [] and planned.payload["hidden_count"] == 0
+    done, state = await accept_result(store, planned)
     assert done is None
     assert (state["status"], state["stage"]) == ("answered", "complete")
 

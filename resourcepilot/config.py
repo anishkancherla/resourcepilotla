@@ -84,7 +84,7 @@ PLATFORM_ROLES: Final[tuple[AgentIdentity, ...]] = (
     AgentIdentity(
         "planner",
         "ResourcePilot Planner",
-        "Ranks open rooms and reroutes when a room is taken",
+        "Ranks open rooms and matches campus housing to your criteria",
         8005,
     ),
     AgentIdentity(
@@ -110,7 +110,8 @@ SERVICES: Final = ("rooms", "wellness", "housing", "emergency")
 SERVICE_CHAINS: Final[dict[str, tuple[str, ...]]] = {
     "rooms": ("intake", "researcher", "campus_rooms", "verification", "planner"),
     "wellness": ("intake", "researcher", "campus_rooms", "verification", "planner"),
-    "housing": ("intake", "researcher", "verification"),
+    # Housing ends at the Planner, which matches the school's halls to the student's criteria.
+    "housing": ("intake", "researcher", "verification", "planner"),
     # The demo call: the Dispatcher validates the form; the call itself waits for "Call now".
     "emergency": ("emergency",),
 }
@@ -122,7 +123,7 @@ def service_chain(service: str, payload: dict[str, object] | None = None) -> tup
     rooms = (payload or {}).get("rooms")
     if service == "wellness" and isinstance(rooms, dict) and rooms.get("status") != "found":
         # No room system to read: the wellness card shows events and the crisis line only.
-        return SERVICE_CHAINS["housing"]
+        return ("intake", "researcher", "verification")
     return SERVICE_CHAINS.get(service, SERVICE_CHAINS["rooms"])
 
 

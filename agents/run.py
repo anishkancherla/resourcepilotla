@@ -43,6 +43,7 @@ from resourcepilot.config import (
 )
 from resourcepilot.emergency import MAX_DETAILS, MAX_LOCATION, MAX_SCHOOL, clean_text
 from resourcepilot.emergency import emergency_handler as emergency_task
+from resourcepilot.housing import recheck_halls
 from resourcepilot.http import Http, ProviderError, build_http
 from resourcepilot.intake import scrub_fields
 from resourcepilot.models import AuditEvent, HealthResponse, TaskRequest, TaskResult
@@ -217,7 +218,7 @@ FORM_PROMPTS = {
     "rooms": "Enter your school email and when you need a room. Only the domain is kept.",
     "wellness": "Enter your school email and when you'd like a quiet room. Only the domain is "
     "kept. In crisis? Call or text 988.",
-    "housing": "Enter your school email. Only the domain is kept.",
+    "housing": "Enter your school email and what you need in a hall. Only the domain is kept.",
     "emergency": "Describe the drill. It calls your team's demo contact, never 911. "
     "In a real emergency, call 911.",
 }
@@ -402,6 +403,24 @@ async def _workflow_action(
     if action == "call_status":
         await _check_call(ctx, sender, state)
         return
+    housing_done = state.get("service") == "housing" and state["status"] == "answered"
+    if action == "view_housing" and housing_done:
+        hall = _hall(state, str(selection.get("option_id", "")))
+        if hall:
+            await _send_card(
+                ctx,
+                sender,
+                f"{hall['name']}, as {_school_name(state)}'s own page describes it. "
+                "You apply on the school's site.",
+                cards.housing_detail(workflow_id, hall, state["data"]),
+            )
+            return
+    if action == "show_housing_facts" and housing_done:
+        await _show_housing_facts(ctx, sender, state)
+        return
+    if action == "show_all_housing" and housing_done:
+        await _show_housing(ctx, sender, state, show_all=True)
+        return
     if action == "show_results" and state["status"] == "awaiting_selection":
         await _show_rooms(ctx, sender, state)
         return
@@ -432,11 +451,48 @@ def _chain(state: dict[str, Any]) -> tuple[str, ...]:
     return service_chain(str(state.get("service") or "rooms"), state.get("data") or {})
 
 
+def _hall(state: dict[str, Any], option_id: str) -> dict[str, Any] | None:
+    halls = state.get("data", {}).get("all_halls") or []
+    return next((dict(hall) for hall in halls if hall.get("option_id") == option_id), None)
+
+
 async def _show_answer(ctx: Context, sender: str, state: dict[str, Any]) -> None:
-    """A finished lookup with nothing to pick: housing, or wellness without a room system."""
+    """A finished lookup with nothing to re-check: housing, or wellness without a room system."""
     if _wellness(state):
         await _show_wellness(ctx, sender, state)
         return
+    await _show_housing(ctx, sender, state)
+
+
+async def _show_housing(
+    ctx: Context, sender: str, state: dict[str, Any], *, show_all: bool = False
+) -> None:
+    """The halls carousel; a no-match card; or, when no hall could be read, the facts card."""
+    data = state["data"]
+    workflow_id = str(state["workflow_id"])
+    if not data.get("all_halls"):
+        await _show_housing_facts(ctx, sender, state)
+        return
+    if not data.get("halls") and not show_all:
+        await _send_card(
+            ctx,
+            sender,
+            f"No hall at {_school_name(state)} fits all of your criteria.",
+            cards.no_housing_match_card(workflow_id, data),
+        )
+        return
+    shown = len(data["all_halls"] if show_all else data["halls"])
+    await _send_card(
+        ctx,
+        sender,
+        f"{shown} on-campus housing option{'s' if shown != 1 else ''} at {_school_name(state)}, "
+        "read from the school's own pages"
+        + (", including ones your criteria rule out." if show_all else ", matches first."),
+        cards.housing_carousel(workflow_id, data, show_all=show_all),
+    )
+
+
+async def _show_housing_facts(ctx: Context, sender: str, state: dict[str, Any]) -> None:
     await _send_card(
         ctx,
         sender,
@@ -800,7 +856,7 @@ def _emergency_payload(task: TaskRequest) -> dict[str, Any]:
 
 
 async def _verify_housing(task: TaskRequest) -> TaskResult:
-    """Verification's housing job: independently re-open every official link."""
+    """Verification's housing job: independently re-open every official link and hall page."""
     payload = dict(task.payload)
     housing = dict(payload.get("housing") or {})
     domain = str(payload.get("school", {}).get("domain") or "")
@@ -811,6 +867,8 @@ async def _verify_housing(task: TaskRequest) -> TaskResult:
             dropped.append(key.removesuffix("_url"))
             housing[key] = ""
     housing["unverified"] = dropped
+    halls, gone = await recheck_halls(_http(), list(housing.get("options") or []), domain)
+    housing["options"], housing["halls_dropped"] = halls, gone
     return task_result(task, "verification", ok=True, payload={**payload, "housing": housing})
 
 

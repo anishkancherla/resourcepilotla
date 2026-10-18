@@ -87,6 +87,7 @@ def test_eight_real_agents_and_only_live_roles_use_the_network() -> None:
     assert importers == [
         "agents/run.py",
         "resourcepilot/emergency.py",
+        "resourcepilot/housing.py",
         "resourcepilot/research.py",
         "resourcepilot/rooms.py",
     ]

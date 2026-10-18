@@ -20,6 +20,28 @@ ROOM_DURATIONS = {"30": "30 minutes", "60": "1 hour", "90": "90 minutes", "120":
 WELLNESS_DURATIONS = {key: ROOM_DURATIONS[key] for key in ("30", "60", "90")}
 MAX_GROUP = 12
 MAX_DAYS_AHEAD = 14
+# Housing criteria. Each one only narrows what the school's own pages say; nothing is inferred.
+HOUSING_WHO = {
+    "first_year": "Incoming first-year",
+    "transfer": "Transfer student",
+    "continuing": "Continuing student",
+    "graduate": "Graduate student",
+    "family": "Student with family",
+}
+HOUSING_STYLES = {
+    "any": "Any style",
+    "traditional": "Traditional hall",
+    "suite": "Suite",
+    "apartment": "Apartment",
+}
+HOUSING_FEATURES = {
+    "ac": "Air conditioning",
+    "kitchen": "Kitchen",
+    "private_bath": "Private or suite bath",
+    "gender_inclusive": "Gender-inclusive option",
+    "accessible": "Accessible rooms",
+}
+MAX_HOUSING_BUDGET = 40_000
 EMAIL_FIELDS = ("email", "school_email")
 
 
@@ -98,10 +120,35 @@ def room_brief(
     }
 
 
+def _checked(value: Any) -> bool:
+    return str(value).strip().lower() in {"true", "1", "yes", "on", "checked"}
+
+
 def housing_brief(fields: dict[str, Any]) -> dict[str, Any]:
-    """Housing facts and official links for the student's school; only the domain is needed."""
+    """The school plus the student's housing criteria. Nothing here is about the student's health,
+    identity, or money beyond an optional yearly budget."""
     domain = _require_domain(fields, "so the Researcher can find your housing office")
-    return {"service": "housing", "school_domain": domain}
+    who = str(fields.get("who") or "first_year")
+    style = str(fields.get("style") or "any")
+    if who not in HOUSING_WHO:
+        raise ValueError("Missing: who the housing is for")
+    if style not in HOUSING_STYLES:
+        raise ValueError("Missing: a housing style")
+    budget_cents = 0
+    raw = str(fields.get("max_budget") or "").replace("$", "").replace(",", "").strip()
+    if raw:
+        dollars = _int(raw)
+        if dollars is None or not 0 < dollars <= MAX_HOUSING_BUDGET:
+            raise ValueError(f"Budget must be between $1 and ${MAX_HOUSING_BUDGET:,} a year")
+        budget_cents = dollars * 100
+    return {
+        "service": "housing",
+        "school_domain": domain,
+        "who": who,
+        "style": style,
+        "must_haves": [key for key in HOUSING_FEATURES if _checked(fields.get(f"need_{key}"))],
+        "max_budget_cents": budget_cents,
+    }
 
 
 def intake_handler(payload: dict[str, Any]) -> dict[str, Any]:

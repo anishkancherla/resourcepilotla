@@ -11,7 +11,7 @@ messages. All eight run from `agents/run.py`, one process per agent, selected by
 | `researcher` | ResourcePilot Campus Researcher | 8002 | School, room-booking system, housing pages, and events feed from the domain |
 | `campus_rooms` | ResourcePilot Campus Rooms | 8003 | Open study or wellness rooms read live from LibCal; the live re-check of one room |
 | `verification` | ResourcePilot Verification | 8004 | Checks room offers; re-opens official housing links; re-fetches the events feed |
-| `planner` | ResourcePilot Planner | 8005 | Ranks open rooms; replans without a taken room |
+| `planner` | ResourcePilot Planner | 8005 | Ranks open rooms; replans without a taken room; matches housing to criteria |
 | `memory_audit` | ResourcePilot Memory and Audit | 8006 | Append-only audit timeline |
 | `emergency` | ResourcePilot Emergency Dispatcher | 8007 | Places one demo-drill call to your team's demo contact, never 911, and reports the transcript |
 
@@ -36,12 +36,12 @@ a workflow for one service.
 | `rooms` | Intake → Campus Researcher → Campus Rooms → Verification → Planner | A rooms carousel, then the re-check and a booking link |
 | `wellness` | Intake → Campus Researcher → Campus Rooms → Verification → Planner | A wellness card: crisis line, open wellness rooms, the week's events (status `awaiting_selection`) |
 | `wellness`, no room system | Intake → Campus Researcher → Verification | The same card without rooms (status `answered`) |
-| `housing` | Intake → Campus Researcher → Verification | A housing card (status `answered`) |
+| `housing` | Intake → Campus Researcher → Verification → Planner | A halls carousel, or the housing facts card when no hall could be read (status `answered`) |
 | `emergency`, preview | Emergency Dispatcher (`phase="preview"`) | A review card with **Call now** and **Cancel** (status `awaiting_call`) |
 | `emergency`, call | Emergency Dispatcher (`phase="call"`) | A call card with **Check the call** (status `called`) |
 
-A chain that ends at Verification is an answer (`answered`); one that ends at the Planner has
-options to pick from (`awaiting_selection`).
+A chain that ends at Verification is an answer (`answered`), and so is housing; a room search that
+ends at the Planner has options to re-check (`awaiting_selection`).
 
 **My bookings** starts no chain. The Orchestrator reads your five most recent workflows whose
 status is `booked` from the shared store and shows them as one card.
@@ -71,7 +71,19 @@ the same rules. A link that fails the checks returns the same card with the reas
 
 For housing it reads IPEDS institutional characteristics and finds the housing office page. The
 portal must be a link on the office's own pages, or on its housing vendor (StarRez), that reads
-like an application or portal.
+like an application or portal. It then reads the halls (`resourcepilot/housing.py`):
+
+1. the listing page: a hand-checked page for a few schools (`KNOWN_HOUSING`), else the office's own
+   links scored for "housing options", "residence halls", "where to live", "apartments", "rates";
+2. hall links on it: text that names a place (Hall, House, Towers, Apartments, Village, ...) or a
+   page nested under the listing, minus noise (associations, contracts, staff, faculty, seasonal
+   housing) and the site's home page; a category link ("Residence Halls") is read as another
+   listing;
+3. each hall page, six at a time within 28 fetches and 30 seconds: from its `<main>` content with
+   menus, headers, and footers removed, the name, an `og:image` on the school's domain, style, who
+   it is for, room types, features, the lowest listed price annualized, and a short "about".
+
+Results are cached per domain. A school whose halls cannot be read gets the facts card.
 
 For wellness it finds the room system the same way but never pauses for a link: rooms are
 optional on the wellness card. It also looks for the school's public Localist calendar at
@@ -116,8 +128,12 @@ the requested window when it has live times, and, when the seat count is known, 
 Rejected offers are kept with their reasons. If no offer passes, the workflow fails with the first
 reason.
 
-For housing, Verification re-opens the office and portal links itself and drops any that do not
-open.
+For housing, Verification re-opens the office and portal links and every hall page itself and
+drops any that do not open. The Planner then rates each hall against each criterion as `match`,
+`unknown` (the page does not say), or `out` (the page rules it out): who it is for (transfer
+students also fit continuing halls), style, each must-have (a missing feature is unknown, never
+out), and budget. It returns `halls` (no `out`, matches first, then fewest unknowns, then lowest
+yearly price, at most ten), `all_halls`, and `hidden_count`.
 
 For wellness, a search with no acceptable room is not a failure: Verification passes the first
 reason on as `room_note`, and the Planner returns no options instead of an error. Verification
@@ -235,6 +251,9 @@ room** and **Other rooms**.
 | LibCal's availability endpoint fails | Campus Rooms offers the school's booking link only, never invented rooms |
 | No room fits the window or the group | Verification rejects the unavailable offer, and the error card says why |
 | A housing link no longer opens | Verification drops it, and the housing card shows only the links that opened |
+| A hall page no longer opens | Verification drops that hall before the Planner sees it |
+| No hall can be read from the school's site | The housing facts card, with a note that the office lists the halls |
+| No hall fits the criteria | A card says so, with **Show all halls** and **Change criteria** |
 | IPEDS cannot be read | The request fails with a retryable error rather than a guess |
 | A specialist task is lost | The Orchestrator retries it once with a fresh request ID, then fails with a clear card |
 | Campus Rooms does not answer a re-check | The rooms carousel comes back with a note, and nothing was handed over |

@@ -144,12 +144,11 @@ async def accept_result(
     chain = service_chain(service, result.payload)
     index = chain.index(result.source_role)
     if index == len(chain) - 1:
-        # A chain that ends at Verification (housing, wellness without rooms) is an answer; one
-        # that ends at the Planner has options to pick from. The emergency preview waits for the
-        # student to press "Call now".
+        # Housing and wellness without rooms are answers; a room search ends at the Planner with
+        # options to re-check. The emergency preview waits for the student to press "Call now".
         if service == "emergency":
             done = {"status": "awaiting_call", "stage": "review"}
-        elif chain[-1] == "verification":
+        elif service == "housing" or chain[-1] == "verification":
             done = {"status": "answered", "stage": "complete"}
         else:
             done = {"status": "awaiting_selection", "stage": "selection"}

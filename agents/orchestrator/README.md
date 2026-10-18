@@ -10,8 +10,9 @@ school. Everything runs on buttons and short forms, and every reply is a card.
   reflection, sensory, and other wellness rooms from your school's LibCal, and the Campus
   Researcher lists the week's health and wellness events with their RSVP links. Every wellness card
   starts with 988 and 911. ResourcePilot never asks about your health or books appointments.
-- **Campus housing.** IPEDS dorm beds, typical room and board, and meal plans, plus your housing
-  office and application portal, each link re-checked. You apply on the school's site.
+- **Campus housing.** Say who you are, the style you want, your must-haves, and a budget. You get
+  every on-campus hall your school lists, matched to them, each with its photo, style, features,
+  and listed price, plus IPEDS facts and the apply link. You apply on the school's site.
 - **Emergency (demo).** A demo drill, never a real emergency call. Say what is happening, where,
   and how many people need help, then review the call. **Call now** has the Emergency Dispatcher
   phone your team's demo contact, never 911, and **Check the call** shows the summary and
