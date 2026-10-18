@@ -29,6 +29,7 @@ EXPECTED = {
     "verification": ("ResourcePilot Verification", 8004),
     "planner": ("ResourcePilot Planner", 8005),
     "memory_audit": ("ResourcePilot Memory and Audit", 8006),
+    "emergency": ("ResourcePilot Emergency Dispatcher", 8007),
 }
 REMOVED_SETTINGS = (
     "_WALLET=",
@@ -73,8 +74,8 @@ def env_with_identities(agents: tuple, *, extra: str = "") -> str:
     return "\n".join(lines) + "\n" + extra
 
 
-def test_seven_real_agents_with_the_contract_names_and_ports() -> None:
-    assert len(PLATFORM_ROLES) == 7
+def test_eight_real_agents_with_the_contract_names_and_ports() -> None:
+    assert len(PLATFORM_ROLES) == 8
     assert ALL_AGENTS == PLATFORM_ROLES
     assert {role.key: (role.name, role.port) for role in ALL_AGENTS} == EXPECTED
     assert [role.key for role in ALL_AGENTS] == list(EXPECTED)
@@ -105,13 +106,21 @@ def test_no_seller_or_wallet_identity_remains() -> None:
 
 
 def test_service_chains_use_real_specialists() -> None:
-    assert SERVICES == ("rooms", "wellness", "housing")
+    assert SERVICES == ("rooms", "wellness", "housing", "emergency")
     assert SERVICE_CHAINS == {
         "rooms": ("intake", "researcher", "campus_rooms", "verification", "planner"),
         "wellness": ("intake", "researcher", "campus_rooms", "verification", "planner"),
         "housing": ("intake", "researcher", "verification"),
+        "emergency": ("emergency",),
     }
-    assert SPECIALISTS == {"intake", "researcher", "campus_rooms", "verification", "planner"}
+    assert SPECIALISTS == {
+        "intake",
+        "researcher",
+        "campus_rooms",
+        "verification",
+        "planner",
+        "emergency",
+    }
     assert SPECIALISTS <= set(ROLE_BY_KEY) - {"orchestrator", "memory_audit"}
 
 
@@ -261,7 +270,7 @@ def test_verify_config_ignores_settings_of_removed_agents(tmp_path) -> None:
         "FET_NETWORK": "stable-testnet",
     }
     summary = verify_config.verify({**values, **leftovers}, tmp_path)
-    assert "7 unique seeds" in summary
+    assert "8 unique seeds" in summary
     assert "DISCOVERY_SEED" in summary
     for secret in ("leftover-secret-seed", *(str(values[a.seed_env]) for a in ALL_AGENTS)):
         assert secret not in summary
@@ -308,7 +317,7 @@ def test_packaging_no_longer_ships_sellers_or_payment_dependencies() -> None:
     makefile = (ROOT / "Makefile").read_text()
     assert "stripe-mock" not in makefile
     assert "sellers" not in makefile
-    assert '"7 agents are starting.' in makefile
+    assert '"8 agents are starting.' in makefile
     for target in ("setup", "bootstrap", "bootstrap-missing", "start", "verify", "check"):
         assert re.search(rf"^{target}:", makefile, flags=re.MULTILINE), target
 
@@ -322,3 +331,20 @@ def test_wellness_without_a_room_system_skips_campus_rooms_and_the_planner() -> 
         "verification",
     )
     assert service_chain("rooms", {"rooms": {"status": "needs_link"}}) == SERVICE_CHAINS["rooms"]
+
+
+def test_add_missing_moves_a_new_agent_off_a_port_an_old_env_uses(tmp_path, monkeypatch) -> None:
+    # Older layouts ran Memory and Audit on 8007, the Emergency Dispatcher's default.
+    bootstrap = load_script("bootstrap")
+    kept = tuple(agent for agent in ALL_AGENTS if agent.key != "emergency")
+    env_file = tmp_path / ".env"
+    text = env_with_identities(kept).replace("MEMORY_AUDIT_PORT=8006\n", "MEMORY_AUDIT_PORT=8007\n")
+    env_file.write_text(text)
+    monkeypatch.setattr(bootstrap, "ENV_FILE", env_file)
+    monkeypatch.setattr("builtins.input", lambda _prompt: "y")
+    added = bootstrap.add_missing()
+    assert [agent.key for agent in added or []] == ["emergency"]
+    written = env_file.read_text()
+    assert "MEMORY_AUDIT_PORT=8007\n" in written
+    assert "EMERGENCY_PORT=8008\n" in written
+    assert "EMERGENCY_SEED=\n" not in written

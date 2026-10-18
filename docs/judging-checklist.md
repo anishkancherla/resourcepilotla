@@ -12,8 +12,9 @@ Capture real evidence for each item. Do not claim an item until you have it.
 
 ## Multi-agent collaboration
 
-- [ ] 7 stable addresses and profiles, all connected with Mailbox: Orchestrator, Intake, Campus
-      Researcher, Campus Rooms, Verification, Planner, and Memory and Audit.
+- [ ] 8 stable addresses and profiles, all connected with Mailbox: Orchestrator, Intake, Campus
+      Researcher, Campus Rooms, Verification, Planner, Memory and Audit, and Emergency
+      Dispatcher.
 - [ ] Each profile has a role README, Chat and Tasks manifests, and a working status-card chat.
 - [ ] The audit timeline shows one workflow ID across Intake, the Campus Researcher, Campus
       Rooms, Verification, the Planner, the re-check, and the booking.
@@ -24,11 +25,14 @@ Capture real evidence for each item. Do not claim an item until you have it.
 ## Interactive cards
 
 - [ ] Services menu, the rooms and housing forms, progress, rooms carousel, room detail, booking
-      link, paste-link, housing, My bookings, error, and status cards all render.
+      link, paste-link, housing, emergency review and call, My bookings, error, and status cards
+      all render.
 - [ ] Every reply is a card: free text gets the services menu. `scripts/print_cards.py` validates
       every payload against the documented card fields.
 - [ ] Card selections carry stable workflow and option IDs. A prose request for a re-check is
       never acted on, and a double click re-checks only once. Both are covered by the tests.
+- [ ] A demo call starts only from **Call now**, and a double press places one call. Show this
+      in the tests, which mock ElevenLabs.
 
 ## Reliability and error recovery
 
@@ -40,6 +44,8 @@ Capture real evidence for each item. Do not claim an item until you have it.
 - [ ] A silent re-check returns to the rooms carousel. This is covered by the tests.
 - [ ] A LibCal outage falls back to the school's booking link, never invented rooms. This is
       covered by the tests.
+- [ ] A demo call that times out is never retried: the workflow fails with a card that says to
+      start a new demo.
 
 ## Real-time data
 
@@ -50,6 +56,9 @@ Capture real evidence for each item. Do not claim an item until you have it.
 - [ ] Be honest: IPEDS facts are the 2022 survey year, the LibCal availability endpoint is not a
       documented API, and ResourcePilot takes no payments, does not reserve rooms, and does not
       apply for housing.
+- [ ] Be honest about the emergency demo: it never calls 911 or any emergency service, it phones
+      one teammate's demo number, and the tests mock ElevenLabs. Claim a live call only if you
+      recorded one with your own ElevenLabs and Twilio setup.
 
 ## Keeps operating after the event
 

@@ -6,7 +6,7 @@ official pages in [docs/official-links.md](docs/official-links.md) for anything 
 ## Preserve the architecture
 
 - Keep this repository standalone and based only on public Fetch.ai packages and documentation.
-- Keep seven real uAgents, all run by `agents/run.py` with `AGENT_ROLE=<key>`:
+- Keep eight real uAgents, all run by `agents/run.py` with `AGENT_ROLE=<key>`:
 
   | Key | Agent | Port | Responsibility |
   | --- | --- | --- | --- |
@@ -17,6 +17,7 @@ official pages in [docs/official-links.md](docs/official-links.md) for anything 
   | `verification` | ResourcePilot Verification | 8004 | Checks every room offer and re-opens housing links and event feeds before you see them |
   | `planner` | ResourcePilot Planner | 8005 | Ranks open rooms and reroutes when a room is taken |
   | `memory_audit` | ResourcePilot Memory and Audit | 8006 | Keeps the append-only audit timeline and your recent bookings |
+  | `emergency` | ResourcePilot Emergency Dispatcher | 8007 | Places one demo-drill call to your team's demo contact, never 911, and reports the transcript |
 
   Each one needs a unique seed variable keyed by its key (`<KEY>_SEED`), a deterministic address,
   its own port and process, a profile README at `agents/<key>/README.md`, a Chat Protocol
@@ -32,8 +33,11 @@ official pages in [docs/official-links.md](docs/official-links.md) for anything 
     Verification). Verification re-fetches the events feed itself. Picking a room uses the same
     re-check and booking link as study rooms.
   - `housing`: Intake → Campus Researcher → Verification, then the housing card.
+  - `emergency`: Emergency Dispatcher (`phase="preview"`) → review card (`awaiting_call`).
+    **Call now** sends the Dispatcher a `phase="call"` task, then the call card (`called`).
+    **Check the call** sends a `phase="status"` task and shows the transcript.
 - The Orchestrator offers services from a menu: Study rooms, Health & wellness, Campus housing,
-  and My bookings.
+  Emergency (demo), and My bookings.
   Requests start only from a form submission; free text gets the menu card, never a workflow.
   Every Orchestrator reply is a card.
 - Never add padding roles, or simulate several roles inside one chatbot.
@@ -72,6 +76,30 @@ official pages in [docs/official-links.md](docs/official-links.md) for anything 
   store health details, book health or counseling appointments, or give health advice. Every
   wellness card and the menu carry the static 988 and 911 crisis line, which never depends on a
   crawl or a feed.
+
+## Preserve emergency-call safety
+
+- The emergency service is a demo drill, never a real emergency call. Never dial 911, campus
+  police, or any emergency service.
+- Take the destination only from `EMERGENCY_DEMO_TO_NUMBER`. Nothing in a chat message, form, or
+  task payload may choose or change the number.
+- Refuse 911, 112, 999, 988, N11 codes, the listed crisis hotlines, short numbers, and anything that
+  is not a full phone number with a country code.
+- The voice's opening line always starts with "this is a ResourcePilot demo drill, not a real
+  emergency".
+- Place at most one call per workflow. The Orchestrator claims **Call now** once, and the
+  Dispatcher claims the call once. Never retry a call, including after a timeout: the workflow
+  fails and the student starts a new demo.
+- Start a call only from the **Call now** selection with its stable workflow ID, never from prose.
+- Cap free text and remove email addresses before anything is sent to ElevenLabs.
+- Cards show only the last four digits of the number. Every emergency card says it is a demo drill
+  that does not contact 911 or campus police, and "In a real emergency, call 911."
+- Never log, show, or put in an error the ElevenLabs API key, the full number, or a raw response
+  body.
+- Only the Emergency Dispatcher talks to ElevenLabs, over https to `api.elevenlabs.io` or
+  `api.<region>.elevenlabs.io`.
+- Never claim a live call was tested or demonstrated without real evidence. The tests mock
+  ElevenLabs.
 
 ## No payments in this build
 

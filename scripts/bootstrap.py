@@ -64,6 +64,29 @@ def missing_identities(values: dict[str, str | None]) -> list[AgentIdentity]:
     return [identity for identity in ALL_AGENTS if not (values.get(identity.seed_env) or "")]
 
 
+def _free_ports(lines: list[str], added: list[AgentIdentity]) -> None:
+    """Move a newly added agent off a port that an existing agent in .env already uses.
+
+    Older layouts used different ports (Memory and Audit was once 8007), so a template default
+    can collide with a kept identity.
+    """
+    values = {
+        key: value for key, _, value in (line.partition("=") for line in lines if "=" in line)
+    }
+    new = {identity.key for identity in added}
+    taken = {
+        int(values.get(identity.port_env) or identity.port)
+        for identity in ALL_AGENTS
+        if identity.key not in new
+    }
+    for identity in added:
+        port = int(values.get(identity.port_env) or identity.port)
+        while port in taken:
+            port += 1
+        taken.add(port)
+        replace_value(lines, identity.port_env, str(port))
+
+
 def add_missing() -> list[AgentIdentity] | None:
     """Append identities for agents added since .env was made. Existing seeds never change."""
     missing = missing_identities(dotenv_values(ENV_FILE))
@@ -81,6 +104,7 @@ def add_missing() -> list[AgentIdentity] | None:
             lines.append(line)
     for identity in missing:
         assign(lines, identity)
+    _free_ports(lines, missing)
     ENV_FILE.write_text("\n".join(lines) + "\n")
     os.chmod(ENV_FILE, 0o600)
     return missing

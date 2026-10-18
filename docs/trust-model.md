@@ -4,7 +4,8 @@ Why can the Orchestrator send a student to a room-booking link or a housing port
 build? Because every link it shows was found on the school's own site, checked by a separate
 agent before the student sees it, and, for a room, read again live right before it is handed
 over. ResourcePilot takes no payments, so there is no money to protect: what it protects is the
-student's trust in the link and the privacy of their email address.
+student's trust in the link and the privacy of their email address. The emergency demo call adds
+one more rule: it must never reach a real emergency line (section 6).
 
 ## 1. Where rooms and links come from
 
@@ -55,9 +56,11 @@ housing.
 
 ## 5. Reading the public web safely
 
-The Campus Researcher, Verification's housing link and events feed re-checks, and Campus Rooms
-are the only parts that fetch web pages. The rules are in [resourcepilot/research.py](../resourcepilot/research.py)
-and [resourcepilot/http.py](../resourcepilot/http.py):
+The Campus Researcher, Verification's housing link and events feed re-checks, Campus Rooms, and
+the Emergency Dispatcher are the only parts that use the network. The first three fetch web pages,
+under the rules in [resourcepilot/research.py](../resourcepilot/research.py) and
+[resourcepilot/http.py](../resourcepilot/http.py). The Emergency Dispatcher talks only to the
+ElevenLabs API (section 6). The web page rules:
 
 - **Hosts.** Only `https` on port 443, with no user info in the URL. The host must be the school's
   domain or one of its subdomains, or a known vendor: `libcal.com`, `emscloudservice.com`,
@@ -90,15 +93,43 @@ and [resourcepilot/http.py](../resourcepilot/http.py):
 A pasted booking link goes through the same checks, so a student cannot use ResourcePilot to fetch
 an arbitrary URL.
 
-## 6. Messages between agents
+## 6. The emergency demo call
+
+The emergency service is a demo drill. It never calls 911, campus police, or any emergency
+service. The Emergency Dispatcher asks an ElevenLabs voice agent to phone one demo contact, a
+teammate playing the dispatcher, over the user's own Twilio number. The rules are enforced in
+[resourcepilot/emergency.py](../resourcepilot/emergency.py), not in a dashboard:
+
+- **One destination.** The Dispatcher dials only `EMERGENCY_DEMO_TO_NUMBER`. Nothing in a chat
+  message, the form, or a task payload can choose or change the number.
+- **Refused numbers.** 911, 112, 999, 988, N11 codes, listed crisis hotlines, short numbers, and
+  anything that is not a full phone number with a country code are refused, even when configured.
+- **Demo notice first.** The voice always opens with "this is a ResourcePilot demo drill, not a
+  real emergency", so a wrong number never hears a fake emergency it could mistake for a real one.
+- **One call per workflow.** The Orchestrator claims the **Call now** press once, and the
+  Dispatcher claims the workflow's call once. A call is never retried, even after a timeout: the
+  workflow fails, and the student starts a new demo.
+- **Never from prose.** Only the **Call now** selection, with its stable workflow ID, can place a
+  call.
+- **Bounded text.** Free text is trimmed, length-capped, and stripped of email addresses before it
+  is sent. The transcript shown on the card is capped too.
+- **Masked number.** Cards show only the last four digits ("•••• 1234").
+- **No secrets in errors.** Errors never include the API key, the full number, or raw response
+  bodies.
+- **One provider host.** Only the Emergency Dispatcher talks to ElevenLabs, over https to
+  `api.elevenlabs.io` or `api.<region>.elevenlabs.io`.
+- **Clear cards.** Every emergency card says it is a demo drill that does not contact 911 or
+  campus police, and "In a real emergency, call 911."
+
+## 7. Messages between agents
 
 - Specialists accept tasks only from the Orchestrator's address, and refuse a task past its
   deadline.
 - The Orchestrator accepts a result only from the address of the role it claims to come from, only
   once, and only for the request the workflow currently expects.
 - Memory and Audit accepts audit events only from ResourcePilot's own agents.
-- Card selections carry stable workflow and option IDs. A re-check is never started from
-  ambiguous prose.
+- Card selections carry stable workflow and option IDs. A re-check or a demo call is never
+  started from ambiguous prose.
 
 ## Limits of this demo
 
@@ -113,3 +144,6 @@ an arbitrary URL.
   system behind a sign-in or JavaScript-only navigation gets the paste-link card.
 - IPEDS facts are the 2022 survey year. Prices and capacity change, so check current figures with
   the school.
+- The demo call depends on the user's own ElevenLabs and Twilio setup, and both bill each call to
+  the user's accounts. A Twilio trial account can call only verified numbers. The tests mock
+  ElevenLabs, so no test places a real call, and live calls were not part of the automated tests.

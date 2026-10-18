@@ -1,6 +1,6 @@
 """Runtime for one ResourcePilot agent, selected by AGENT_ROLE.
 
-Seven agents, each its own process, seed, address, and profile. The Orchestrator owns the ASI:One
+Eight agents, each its own process, seed, address, and profile. The Orchestrator owns the ASI:One
 chat and the workflow, and delegates every step with ``ctx.send``; specialists reply with
 correlated TaskResults. Study rooms: Intake, then the Campus Researcher (finds the school's room
 system), Campus Rooms (reads open rooms live), Verification, and the Planner. Before handing over a
@@ -8,7 +8,9 @@ booking link, Campus Rooms re-checks that room live; a room that was just taken 
 back to the other open rooms. Health and wellness runs the same chain for wellness rooms, plus
 the Researcher's events feed, which Verification re-fetches; a school with no room system skips
 Campus Rooms and the Planner. Housing: Intake, the Campus Researcher, then Verification, which
-re-opens every official link. ResourcePilot never reserves a room and takes no payments.
+re-opens every official link. Emergency (demo): the Emergency Dispatcher checks the form, the
+student reviews the call, and only "Call now" makes it phone the one configured demo contact,
+never 911; the call is never retried. ResourcePilot never reserves a room and takes no payments.
 """
 
 from __future__ import annotations
@@ -39,6 +41,8 @@ from resourcepilot.config import (
     get_role,
     service_chain,
 )
+from resourcepilot.emergency import MAX_DETAILS, MAX_LOCATION, MAX_SCHOOL, clean_text
+from resourcepilot.emergency import emergency_handler as emergency_task
 from resourcepilot.http import Http, ProviderError, build_http
 from resourcepilot.intake import scrub_fields
 from resourcepilot.models import AuditEvent, HealthResponse, TaskRequest, TaskResult
@@ -46,8 +50,9 @@ from resourcepilot.research import recheck_events, recheck_link, research
 from resourcepilot.rooms import campus_rooms_handler
 from resourcepilot.store import store
 from resourcepilot.workflow import (
-    accept_recheck,
+    SIDE_STAGES,
     accept_result,
+    accept_side_result,
     advance_to,
     begin_workflow,
     execute_specialist,
@@ -78,11 +83,11 @@ task_proto = Protocol(name="ResourcePilotTasks", version="1.0.0")
 READY = False
 HTTP: Http | None = None
 # Network specialists: they read the public web, so they run outside the synchronous HANDLERS.
-LIVE_ROLES = frozenset({"researcher", "campus_rooms"})
+LIVE_ROLES = frozenset({"researcher", "campus_rooms", "emergency"})
 
 
 def _http() -> Http:
-    """Live public sources, used only by the Campus Researcher, Campus Rooms, and Verification."""
+    """Network access for the Campus Researcher, Campus Rooms, Verification, and the Dispatcher."""
     global HTTP
     if HTTP is None:
         HTTP = build_http(store)
@@ -213,7 +218,11 @@ FORM_PROMPTS = {
     "wellness": "Enter your school email and when you'd like a quiet room. Only the domain is "
     "kept. In crisis? Call or text 988.",
     "housing": "Enter your school email. Only the domain is kept.",
+    "emergency": "Describe the drill. It calls your team's demo contact, never 911. "
+    "In a real emergency, call 911.",
 }
+# Free-text drill fields are trimmed and stripped of emails before the request is stored.
+EMERGENCY_TEXT = {"location": MAX_LOCATION, "details": MAX_DETAILS, "school": MAX_SCHOOL}
 FIELD_LIMIT = 200
 
 
@@ -229,19 +238,24 @@ def _form_fields(selection: dict[str, Any]) -> dict[str, Any]:
 
 
 async def _start_workflow(ctx: Context, sender: str, service: str, fields: dict[str, Any]) -> None:
+    if service == "emergency":
+        fields = {
+            key: clean_text(value, EMERGENCY_TEXT[key]) if key in EMERGENCY_TEXT else value
+            for key, value in fields.items()
+        }
     request = {"service": service, "fields": fields}
     task = await begin_workflow(store, requester=sender, session_id=_session(ctx), request=request)
     state = await store.get_workflow(task.workflow_id)
     assert state is not None
-    await _audit(ctx, state, "workflow_started", stage="intake", service=service)
+    await _audit(ctx, state, "workflow_started", stage=task.target_role, service=service)
     await _dispatch(ctx, task)
     chain = service_chain(service)
     names = ", ".join(ROLE_BY_KEY[role].name.removeprefix("ResourcePilot ") for role in chain)
     await _send_card(
         ctx,
         sender,
-        f"Got it. {names} are on it.",
-        cards.progress_card(task.workflow_id, "intake", chain),
+        f"Got it. {names} {'is' if len(chain) == 1 else 'are'} on it.",
+        cards.progress_card(task.workflow_id, task.target_role, chain),
     )
 
 
@@ -359,6 +373,10 @@ async def _workflow_action(
             await _show_rooms(ctx, sender, state)
         elif state["status"] == "booked":
             await _send_link(ctx, sender, state, "Here is your booking link again.")
+        elif state["status"] == "awaiting_call":
+            await _show_call_review(ctx, sender, state)
+        elif state["status"] == "called":
+            await _show_call(ctx, sender, state, "Here is your demo call.")
         elif state["status"] == "failed":
             error = str(state.get("error") or "Something went wrong")
             await _send_card(
@@ -377,6 +395,12 @@ async def _workflow_action(
         return
     if action == "submit_link":
         await _submit_link(ctx, sender, state, str(selection.get("booking_link") or ""))
+        return
+    if action == "place_call":
+        await _place_call(ctx, sender, state)
+        return
+    if action == "call_status":
+        await _check_call(ctx, sender, state)
         return
     if action == "show_results" and state["status"] == "awaiting_selection":
         await _show_rooms(ctx, sender, state)
@@ -595,6 +619,138 @@ async def _recheck_result(ctx: Context, state: dict[str, Any], result: TaskResul
 
 
 # ---------------------------------------------------------------------------
+# Emergency (demo): review, then exactly one call to the configured demo contact, never retried.
+# ---------------------------------------------------------------------------
+
+
+async def _show_call_review(ctx: Context, sender: str, state: dict[str, Any]) -> None:
+    preview = dict(state["data"].get("preview") or {})
+    await _send_card(
+        ctx,
+        sender,
+        f"Review the demo call. It will phone your demo contact ({preview.get('to', '')}), "
+        "never 911. Press Call now to place it.",
+        cards.emergency_review_card(str(state["workflow_id"]), preview),
+    )
+
+
+async def _show_call(ctx: Context, sender: str, state: dict[str, Any], narration: str) -> None:
+    data = state["data"]
+    await _send_card(
+        ctx,
+        sender,
+        narration,
+        cards.emergency_call_card(
+            str(state["workflow_id"]), dict(data.get("call") or {}), data.get("call_status")
+        ),
+    )
+
+
+async def _side_task(
+    ctx: Context, state: dict[str, Any], stage: str, payload: dict[str, Any], **patch: Any
+) -> dict[str, Any]:
+    """Send the Emergency Dispatcher one out-of-chain step and wait for its answer."""
+    task = make_task(
+        workflow_id=str(state["workflow_id"]),
+        requester=str(state["requester"]),
+        session_id=str(state["session_id"]),
+        target_role="emergency",
+        payload=payload,
+    )
+    state = await store.patch_workflow(
+        str(state["workflow_id"]),
+        {
+            "status": "running",
+            "stage": stage,
+            "expected_request_id": task.request_id,
+            "deadline_at": task.deadline_at,
+            **patch,
+        },
+    )
+    await _dispatch(ctx, task)
+    return state
+
+
+async def _place_call(ctx: Context, sender: str, state: dict[str, Any]) -> None:
+    """Claim the one call this workflow may place; a second press never dials again."""
+    workflow_id = str(state["workflow_id"])
+    if state["status"] != "awaiting_call" or not await store.claim("place_call", workflow_id):
+        await _notice(
+            ctx,
+            sender,
+            "Already placed",
+            "This demo call was already placed. Start a new demo to call again.",
+            buttons=[_status_button(workflow_id), ("Menu", {"action": "start_over"})],
+        )
+        return
+    data = state["data"]
+    state = await _side_task(
+        ctx,
+        state,
+        "call",
+        {"phase": "call", "brief": dict(data["brief"]), "workflow_id": workflow_id},
+    )
+    await _audit(ctx, state, "demo_call_requested")
+    await _send_card(
+        ctx,
+        sender,
+        "Placing the demo call to your demo contact. It never calls 911.",
+        cards.progress_card(workflow_id, "call"),
+    )
+
+
+async def _check_call(ctx: Context, sender: str, state: dict[str, Any]) -> None:
+    workflow_id = str(state["workflow_id"])
+    if state["status"] != "called":
+        await _notice(
+            ctx,
+            sender,
+            "Not available",
+            "There is no placed call to check for this request right now.",
+            buttons=[_status_button(workflow_id), ("Menu", {"action": "start_over"})],
+        )
+        return
+    await _side_task(
+        ctx, state, "call_status", {"phase": "status", "call": dict(state["data"]["call"])}
+    )
+    await _send_card(
+        ctx, sender, "Checking the demo call.", cards.progress_card(workflow_id, "call_status")
+    )
+
+
+async def _call_result(ctx: Context, state: dict[str, Any], result: TaskResult) -> None:
+    workflow_id, requester = str(state["workflow_id"]), str(state["requester"])
+    if state["stage"] == "call":
+        if not result.ok:
+            error = f"{result.error or 'The demo call could not be placed'}. It was not retried"
+            state = await store.patch_workflow(workflow_id, {"status": "failed", "error": error})
+            await _audit(ctx, state, "demo_call_failed")
+            await _send_card(
+                ctx, requester, f"{error}.", cards.error_card(error, service="emergency")
+            )
+            return
+        data = {**state["data"], "call": dict(result.payload.get("call") or {})}
+        state = await store.patch_workflow(
+            workflow_id, {"status": "called", "stage": "complete", "data": data}
+        )
+        await _audit(ctx, state, "demo_call_placed")
+        await _show_call(
+            ctx, requester, state, "Calling your demo contact now. Put that phone on speaker."
+        )
+        return
+    note = "Here is the demo call."
+    data = dict(state["data"])
+    if result.ok:
+        data["call_status"] = dict(result.payload.get("call_status") or {})
+    else:
+        note = f"{result.error or 'The call could not be checked'}. Try again shortly."
+    state = await store.patch_workflow(
+        workflow_id, {"status": "called", "stage": "complete", "data": data}
+    )
+    await _show_call(ctx, requester, state, note)
+
+
+# ---------------------------------------------------------------------------
 # Specialists
 # ---------------------------------------------------------------------------
 
@@ -626,11 +782,21 @@ async def _live_task(task: TaskRequest) -> TaskResult:
     try:
         if ROLE.key == "researcher":
             payload = await research(dict(task.payload), _http(), now=utc_now())
+        elif ROLE.key == "emergency":
+            payload = await emergency_task(_emergency_payload(task), _http(), store)
         else:
             payload = await campus_rooms_handler(dict(task.payload), _http())
     except (ProviderError, KeyError, ValueError) as exc:
         return task_result(task, ROLE.key, ok=False, error=str(exc))
     return task_result(task, ROLE.key, ok=True, payload=payload)
+
+
+def _emergency_payload(task: TaskRequest) -> dict[str, Any]:
+    """The first task carries the submitted form; later steps name their own phase."""
+    payload = dict(task.payload)
+    if payload.get("phase"):
+        return payload
+    return {"phase": "preview", "brief": dict(payload.get("fields") or {})}
 
 
 async def _verify_housing(task: TaskRequest) -> TaskResult:
@@ -666,10 +832,14 @@ async def handle_task_result(ctx: Context, sender: str, result: TaskResult) -> N
     if ROLE.key != "orchestrator" or sender != ADDRESSES.get(result.source_role):
         return
     current = await store.get_workflow(result.workflow_id)
-    if current is not None and current.get("stage") == "recheck":
-        recheck_state = await accept_recheck(store, result)
-        if recheck_state is not None:
-            await _recheck_result(ctx, recheck_state, result)
+    if current is not None and current.get("stage") in SIDE_STAGES:
+        side_state = await accept_side_result(store, result)
+        if side_state is None:
+            return
+        if side_state["stage"] == "recheck":
+            await _recheck_result(ctx, side_state, result)
+        else:
+            await _call_result(ctx, side_state, result)
         return
     try:
         next_task, state = await accept_result(store, result)
@@ -706,6 +876,8 @@ async def handle_task_result(ctx: Context, sender: str, result: TaskResult) -> N
         await _show_answer(ctx, result.requester, state)
     elif state["status"] == "awaiting_selection":
         await _show_rooms(ctx, result.requester, state)
+    elif state["status"] == "awaiting_call":
+        await _show_call_review(ctx, result.requester, state)
     elif state["status"] == "failed":
         error = str(state.get("error", "Something went wrong"))
         if error.startswith("Missing"):
@@ -742,6 +914,20 @@ async def _recover_overdue(ctx: Context, state: dict[str, Any]) -> None:
             note=f"The {ROLE_BY_KEY['campus_rooms'].name} did not answer in time. "
             "Pick a room to try again.",
         )
+        return
+    if stage == "call":
+        # Never retried: a lost answer may mean the phone is already ringing.
+        error = (
+            "The Emergency Dispatcher did not confirm the demo call in time. Calls are never "
+            "retried; start a new demo to try again"
+        )
+        state = await store.patch_workflow(workflow_id, {"status": "failed", "error": error})
+        await _audit(ctx, state, "demo_call_timeout")
+        await _send_card(ctx, requester, f"{error}.", cards.error_card(error, service="emergency"))
+        return
+    if stage == "call_status":
+        state = await store.patch_workflow(workflow_id, {"status": "called", "stage": "complete"})
+        await _show_call(ctx, requester, state, "The call check timed out. Try again shortly.")
         return
     if stage not in SPECIALISTS:
         return

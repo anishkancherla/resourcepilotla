@@ -73,6 +73,23 @@ SAMPLE_HOUSING: dict[str, Any] = {
     },
 }
 
+# Sample emergency drill data: a masked number only, never a real one.
+SAMPLE_PREVIEW: dict[str, Any] = {
+    "to": "\u2022\u2022\u2022\u2022 0142",
+    "opening": "Hello, this is a ResourcePilot demo drill, not a real emergency.",
+    "rows": [("Calling", "Your demo contact (\u2022\u2022\u2022\u2022 0142), not 911")],
+}
+SAMPLE_CALL: dict[str, Any] = {
+    "to": "\u2022\u2022\u2022\u2022 0142",
+    "conversation_id": "conv_demo",
+}
+SAMPLE_CALL_STATUS: dict[str, Any] = {
+    "status_label": "Call ended",
+    "duration": "1:15",
+    "summary": "Reported a fainting at the library.",
+    "transcript": [{"speaker": "Dispatcher", "message": "What is your location?"}],
+}
+
 
 def show(title: str, card: tuple[str, dict[str, Any]], *, terminal: bool = False) -> None:
     kind, payload = card
@@ -85,7 +102,7 @@ def show(title: str, card: tuple[str, dict[str, Any]], *, terminal: bool = False
 
 def samples() -> None:
     show("Campus services menu", cards.welcome_card())
-    for service in ("rooms", "wellness", "housing"):
+    for service in ("rooms", "wellness", "housing", "emergency"):
         show(f"{service} form", cards.service_form(service))
     show("Wellness card, nothing found", cards.wellness_card("demo", {}))
     show("Paste-link fallback", cards.room_link_card("demo", "Example University"))
@@ -96,6 +113,9 @@ def samples() -> None:
     show("Sample booking link", cards.room_link_receipt(SAMPLE_OPTIONS[0]), terminal=True)
     show("Sample housing", cards.housing_card(SAMPLE_HOUSING))
     show("No bookings yet", cards.bookings_card([]))
+    show("Demo call review", cards.emergency_review_card("demo", SAMPLE_PREVIEW))
+    show("Demo call placed", cards.emergency_call_card("demo", SAMPLE_CALL))
+    show("Demo call checked", cards.emergency_call_card("demo", SAMPLE_CALL, SAMPLE_CALL_STATUS))
 
 
 async def live_rooms(domain: str, found: dict[str, Any], rooms_http: Http) -> None:

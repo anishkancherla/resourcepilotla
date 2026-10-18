@@ -236,3 +236,14 @@ async def test_wellness_with_a_room_system_goes_to_campus_rooms() -> None:
     found = {**research.payload, "rooms": {"status": "found"}, "wellness": {}}
     rooms, _ = await accept_result(store, reply(research, found))
     assert rooms is not None and rooms.target_role == "campus_rooms"
+
+
+async def test_emergency_starts_at_the_dispatcher_and_waits_for_call_now() -> None:
+    store = MemoryStore()
+    task = await start(store, {"service": "emergency", "fields": {"kind": "medical"}})
+    assert task.target_role == "emergency"
+    state = await store.get_workflow(task.workflow_id)
+    assert state is not None and state["stage"] == "emergency"
+    done, state = await accept_result(store, reply(task, {"preview": {"to": "x"}}))
+    assert done is None
+    assert (state["status"], state["stage"]) == ("awaiting_call", "review")

@@ -1,8 +1,8 @@
 # Architecture
 
-ResourcePilot is seven independent uAgents that share one Postgres database. The Orchestrator owns
-the ASI:One chat and every workflow. The six specialists each own one step and answer only over
-messages. All seven run from `agents/run.py`, one process per agent, selected by `AGENT_ROLE`.
+ResourcePilot is eight independent uAgents that share one Postgres database. The Orchestrator owns
+the ASI:One chat and every workflow. The seven specialists each own one step and answer only over
+messages. All eight run from `agents/run.py`, one process per agent, selected by `AGENT_ROLE`.
 
 | Key | Agent | Port | Job in the workflow |
 | --- | --- | --- | --- |
@@ -13,6 +13,7 @@ messages. All seven run from `agents/run.py`, one process per agent, selected by
 | `verification` | ResourcePilot Verification | 8004 | Checks room offers; re-opens official housing links; re-fetches the events feed |
 | `planner` | ResourcePilot Planner | 8005 | Ranks open rooms; replans without a taken room |
 | `memory_audit` | ResourcePilot Memory and Audit | 8006 | Append-only audit timeline |
+| `emergency` | ResourcePilot Emergency Dispatcher | 8007 | Places one demo-drill call to your team's demo contact, never 911, and reports the transcript |
 
 ## Protocols
 
@@ -36,6 +37,8 @@ a workflow for one service.
 | `wellness` | Intake → Campus Researcher → Campus Rooms → Verification → Planner | A wellness card: crisis line, open wellness rooms, the week's events (status `awaiting_selection`) |
 | `wellness`, no room system | Intake → Campus Researcher → Verification | The same card without rooms (status `answered`) |
 | `housing` | Intake → Campus Researcher → Verification | A housing card (status `answered`) |
+| `emergency`, preview | Emergency Dispatcher (`phase="preview"`) | A review card with **Call now** and **Cancel** (status `awaiting_call`) |
+| `emergency`, call | Emergency Dispatcher (`phase="call"`) | A call card with **Check the call** (status `called`) |
 
 A chain that ends at Verification is an answer (`answered`); one that ends at the Planner has
 options to pick from (`awaiting_selection`).
@@ -127,6 +130,29 @@ the snuggest fit for the group. The first option is labeled **Earliest opening**
 a stable `option_id` derived from the room ID and its start time, so a button press always names
 the same room and slot.
 
+### Emergency Dispatcher
+
+The emergency service is a demo drill. Its form asks what kind of emergency it is (medical, fire or
+smoke, someone in danger, or other), where on campus, how many people need help, optional details,
+whether you are safe, and an optional school name. Its chain is only the Emergency Dispatcher.
+
+1. **Preview.** The Orchestrator sends the Dispatcher a `phase="preview"` task. The Dispatcher
+   validates the form, removes email addresses, caps free text, and returns the review data: the
+   masked demo number ("•••• 1234"), "not 911", the voice's opening line, and the facts. The
+   review card offers **Call now** and **Cancel**, and the workflow waits at `awaiting_call`.
+2. **Call.** The Orchestrator claims the **Call now** press once per workflow, then sends a
+   `phase="call"` task. The Dispatcher also claims the call once per workflow and places exactly
+   one ElevenLabs Twilio outbound call to `EMERGENCY_DEMO_TO_NUMBER`. It is never retried. The
+   call card (status `called`) offers **Check the call**.
+3. **Status.** **Check the call** sends a `phase="status"` task. The Dispatcher reads the call's
+   status, duration, summary, and transcript from ElevenLabs, and the Orchestrator shows them.
+
+Only the configured number is ever dialed; a number in the form or task payload is ignored.
+Emergency, crisis, and short numbers are refused, and the voice always opens with "this is a
+ResourcePilot demo drill, not a real emergency". Every emergency card says it is a demo drill that
+does not contact 911 or campus police, and "In a real emergency, call 911." A call starts only from
+the **Call now** selection, never from prose. The rules are in [trust-model.md](trust-model.md).
+
 ## The task pipeline
 
 ```text
@@ -135,6 +161,8 @@ Orchestrator ─TaskRequest─▶ Intake            ─TaskResult─▶ Orchestr
              ─TaskRequest─▶ Campus Rooms      ─TaskResult─▶ Orchestrator
              ─TaskRequest─▶ Verification      ─TaskResult─▶ Orchestrator
              ─TaskRequest─▶ Planner           ─TaskResult─▶ Orchestrator ─▶ rooms carousel
+
+Orchestrator ─TaskRequest─▶ Emergency Dispatcher ─TaskResult─▶ Orchestrator ─▶ emergency card
 ```
 
 Each step is a `ctx.send` from the Orchestrator to the next specialist's address. Each
@@ -187,9 +215,14 @@ room** and **Other rooms**.
 - **One retry.** A chain task that misses its deadline is retried once with a fresh request ID.
   A second miss fails the workflow with a card that names the agent that did not answer. A
   re-check that misses its deadline returns the student to the rooms carousel instead.
+- **Emergency steps.** A silent emergency preview is retried once; no call is placed at preview.
+  A call step that misses its deadline is never retried: the workflow fails with a card that says
+  to start a new demo, so one press can never dial twice. A silent status check returns to the
+  call card with a note.
 - **One-time claims.** Each inbound chat message, each task result, each timeout, each pasted
-  link, and each re-check press is claimed once in Postgres before it is acted on, so a
-  redelivered message or a double press cannot start the same step twice.
+  link, each re-check press, and each **Call now** press is claimed once in Postgres before it is
+  acted on, so a redelivered message or a double press cannot start the same step twice. The
+  Emergency Dispatcher also claims each workflow's call once.
 - **Sender checks.** Tasks are accepted only from the Orchestrator, results only from the address
   of the role they claim, and audit events only from ResourcePilot's own agents.
 
@@ -205,6 +238,9 @@ room** and **Other rooms**.
 | IPEDS cannot be read | The request fails with a retryable error rather than a guess |
 | A specialist task is lost | The Orchestrator retries it once with a fresh request ID, then fails with a clear card |
 | Campus Rooms does not answer a re-check | The rooms carousel comes back with a note, and nothing was handed over |
+| The Emergency Dispatcher does not answer a preview | The preview is retried once; no call was placed |
+| The Emergency Dispatcher does not answer a call | The call is never retried; the workflow fails with a card that says to start a new demo. If the answer arrives late, the call card is shown, since the phone may already be ringing |
+| The Emergency Dispatcher does not answer a status check | The call card comes back with a note |
 | A result arrives after the workflow moved on | It is ignored |
 
 ## State
@@ -213,9 +249,10 @@ room** and **Other rooms**.
 | --- | --- |
 | `workflows` | One JSON state per workflow: service, stage, status, correlation, deadline, latest data, the chosen option |
 | `workflow_events` | The append-only audit timeline written by Memory and Audit |
-| `idempotency_keys` | One-time claims for chat messages, results, timeouts, pasted links, and re-checks |
+| `idempotency_keys` | One-time claims for chat messages, results, timeouts, pasted links, re-checks, and demo calls |
 | `api_cache` | Cached public lookups (IPEDS, Researcher results, LibCal pages) with an expiry |
 
 Workflow statuses: `running` while a specialist works, `awaiting_link` when the Researcher needs a
 pasted link, `awaiting_selection` when the rooms carousel is shown, `booked` after a successful
-re-check, `answered` for a housing card, and `failed` with a reason.
+re-check, `answered` for a housing card, `awaiting_call` when the emergency review card is shown,
+`called` after the demo call is placed, and `failed` with a reason.

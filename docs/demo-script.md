@@ -2,7 +2,7 @@
 
 Before recording:
 
-1. Run `make start` and connect all seven agents with Mailbox.
+1. Run `make start` and connect all eight agents with Mailbox.
 2. Open ASI:One and start a chat with the ResourcePilot Orchestrator.
 3. Have a school email ready at a LibCal school for the room steps (for example Purdue, UCR, or
    UCLA). Know one school that gets the paste-link card (for example MIT), and have its library's
@@ -11,13 +11,19 @@ Before recording:
    re-check. The honest way is to book that slot yourself on the school's booking page, in another
    tab with your own school sign-in, and cancel it after recording. If you cannot, use the test in
    step 3 instead.
+5. For the optional emergency step, finish the setup in
+   [agents/emergency/README.md](../agents/emergency/README.md) and set `EMERGENCY_DEMO_TO_NUMBER`
+   to a teammate's phone. Place one test call the day before. Each call is billed to your
+   ElevenLabs and Twilio accounts. Skip the step if this is not set up.
+
+The optional steps add about a minute.
 
 ## 1. The services menu (15 s)
 
 Say "hi". The Orchestrator answers with the campus services menu: **Study rooms**, **Health &
-wellness**, **Campus housing**, and **My bookings**. The 988 crisis line is at the bottom. Type a
-sentence instead, and it answers with the same menu: every request starts from a button and a
-short form.
+wellness**, **Campus housing**, **Emergency (demo)**, and **My bookings**. The 988 crisis line is
+at the bottom. Type a sentence instead, and it answers with the same menu: every request starts
+from a button and a short form.
 
 ## 2. A real study room at any school (55 s)
 
@@ -69,18 +75,29 @@ Press **Menu**, then **Open campus housing**, and enter the same email. The card
 Point at **Sources**: "Verification re-opened each official link itself. You apply on the school's
 site."
 
-## 6. My bookings (10 s)
+## 6. Optional: Emergency (demo) (30 s)
+
+Put your teammate's phone on speaker, near the microphone. Press **Menu**, then **Emergency
+(demo)**. Pick a kind (for example fire or smoke), enter where on campus and how many people, and
+submit the form. On the review card, point at "not 911" and the masked number, which shows only
+the last four digits. Say: "It can only call our demo contact, and the voice opens by saying this
+is a demo drill." Press **Call now**. The phone rings, the voice describes the emergency, and your
+teammate answers as the dispatcher. After the call, press **Check the call** to show the summary
+and transcript. Say: "One press places one call, and it is never retried. In a real emergency,
+call 911."
+
+## 7. My bookings (10 s)
 
 Press **Menu**, then **My bookings**. The room from step 2 is there with its booking link.
 
-## 7. An agent profile chat (15 s)
+## 8. An agent profile chat (15 s)
 
 Open the Campus Rooms profile on Agentverse. Show its README and its Chat and Tasks manifests, then
 send it a message. It answers with its status card, which names its role and has a **Use
-ResourcePilot** button that points back to the Orchestrator. Say: "Seven separate agents, each
+ResourcePilot** button that points back to the Orchestrator. Say: "Eight separate agents, each
 with its own address and job."
 
-## 8. Close (5 s)
+## 9. Close (5 s)
 
 Say: "Free study rooms at any school, re-checked live, and housing facts with official links. No
 payments, no reservations, and you always book with your own sign-in."

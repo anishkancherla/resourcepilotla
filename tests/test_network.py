@@ -315,3 +315,96 @@ async def test_room_flow_on_postgres(postgres_network) -> None:
     assert last_card(network, "detail")[1]["title"] == "Your booking link"
     bookings = await network.store.recent_bookings(USER, 5)
     assert [booking["option"]["lines"][0]["name"] for booking in bookings] == ["WALC 3138"]
+
+
+def emergency_setup(network, monkeypatch, **fake_options):
+    """Configure the demo call and serve ElevenLabs from a recording fake; no call is real."""
+    import httpx
+    from test_emergency import ENV, FakeElevenLabs
+
+    from resourcepilot.http import Http
+
+    for key, value in ENV.items():
+        monkeypatch.setenv(key, value)
+    fake = FakeElevenLabs(**fake_options)
+    client = httpx.AsyncClient(transport=httpx.MockTransport(fake))
+    monkeypatch.setattr(network.by_key["emergency"], "HTTP", Http(client, network.store))
+    return fake
+
+
+EMERGENCY_FORM = {
+    "action": "submit_form",
+    "service": "emergency",
+    "kind": "medical",
+    "location": "Powell Library, 2nd floor",
+    "people": "1",
+    "details": f"Student fainted. Email {EMAIL_USER}@ucla.edu",
+    "caller_safe": "yes",
+    "school": "UCLA",
+    # A number in the form is never dialed; only EMERGENCY_DEMO_TO_NUMBER is.
+    "to_number": "+19495550199",
+}
+
+
+def outbound(fake) -> list:
+    return [request for request in fake.requests if request.method == "POST"]
+
+
+async def test_emergency_drill_reviews_then_places_exactly_one_call(network, monkeypatch) -> None:
+    from test_emergency import API_KEY, DEMO_NUMBER
+
+    fake = emergency_setup(network, monkeypatch)
+    await network.send_user(chat({"action": "open_service", "service": "emergency"}))
+    assert "never 911" in last_card(network, "form")[1]["title"]
+    await network.send_user(chat(EMERGENCY_FORM))
+    _, review, narration = last_card(network, "review")
+    assert completed_roles(network) == ["emergency"]
+    assert fake.requests == []  # nothing is dialed before Call now
+    assert "never 911" in narration and "0142" in narration
+    assert review["approve_cta"]["label"] == "Call now"
+    await network.send_user(chat(review["approve_cta"]["selection"]))
+    _, call, narration = last_card(network, "custom")
+    assert call["root"]["title"] == "Demo call" and "speaker" in narration
+    (placed,) = outbound(fake)
+    assert json.loads(placed.content)["to_number"] == DEMO_NUMBER
+    await network.send_user(chat(review["approve_cta"]["selection"]))  # a second press
+    assert last_card(network, "custom")[1]["root"]["title"] == "Already placed"
+    assert len(outbound(fake)) == 1
+    check = next(
+        button["action"]["selection"]
+        for button in call["root"]["children"][-1]["children"]
+        if button["label"] == "Check the call"
+    )
+    await network.send_user(chat(check))
+    _, checked, _ = last_card(network, "custom")
+    encoded = json.dumps(checked, ensure_ascii=False)
+    assert "What is your location?" in encoded and "1:15" in encoded
+    assert next(iter(network.store.workflows.values()))["status"] == "called"
+    stored = dumps([network.store.workflows, network.store.events, network.store.claims])
+    for secret in (API_KEY, DEMO_NUMBER, "5550142", EMAIL_USER, "+19495550199"):
+        assert secret not in stored
+        assert all(secret not in text for text in network.texts())
+
+
+async def test_a_lost_demo_call_answer_is_never_retried(network, monkeypatch) -> None:
+    fake = emergency_setup(network, monkeypatch)
+    await network.send_user(chat(EMERGENCY_FORM))
+    _, review, _ = last_card(network, "review")
+    network.set_offline("emergency")
+    await network.send_user(chat(review["approve_cta"]["selection"]))
+    await network.advance(31)
+    await network.advance(31)
+    assert any("never retried" in text for text in network.texts())
+    assert next(iter(network.store.workflows.values()))["status"] == "failed"
+    network.set_offline("emergency", False)
+    await network.send_user(chat(review["approve_cta"]["selection"]))
+    assert last_card(network, "custom")[1]["root"]["title"] == "Already placed"
+    assert outbound(fake) == []
+
+
+async def test_emergency_without_setup_explains_and_calls_no_one(network, monkeypatch) -> None:
+    for key in ("ELEVENLABS_API_KEY", "EMERGENCY_DEMO_TO_NUMBER"):
+        monkeypatch.delenv(key, raising=False)
+    await network.send_user(chat(EMERGENCY_FORM))
+    assert any("not set up yet" in text for text in network.texts())
+    assert next(iter(network.store.workflows.values()))["status"] == "failed"

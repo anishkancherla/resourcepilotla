@@ -30,7 +30,7 @@ services:
       timeout: 3s
       retries: 20
 
-  # Seven ResourcePilot agents, each its own uAgent process run by agents/run.py.
+  # Eight ResourcePilot agents, each its own uAgent process run by agents/run.py.
   orchestrator:
     <<: *agent
     environment:
@@ -86,6 +86,14 @@ services:
       AGENT_ROLE: memory_audit
       AGENT_PORT: ${MEMORY_AUDIT_PORT}
     ports: ["127.0.0.1:${MEMORY_AUDIT_PORT}:18000"]
+
+  emergency:
+    <<: *agent
+    environment:
+      AGENT_MODULE: agents.run
+      AGENT_ROLE: emergency
+      AGENT_PORT: ${EMERGENCY_PORT}
+    ports: ["127.0.0.1:${EMERGENCY_PORT}:18000"]
 
 volumes:
   postgres-data:

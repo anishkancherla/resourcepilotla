@@ -12,15 +12,20 @@ school. Everything runs on buttons and short forms, and every reply is a card.
   starts with 988 and 911. ResourcePilot never asks about your health or books appointments.
 - **Campus housing.** IPEDS dorm beds, typical room and board, and meal plans, plus your housing
   office and application portal, each link re-checked. You apply on the school's site.
+- **Emergency (demo).** A demo drill, never a real emergency call. Say what is happening, where,
+  and how many people need help, then review the call. **Call now** has the Emergency Dispatcher
+  phone your team's demo contact, never 911, and **Check the call** shows the summary and
+  transcript. In a real emergency, call 911.
 - **My bookings.** Your recent re-checked rooms and their booking links.
 
 It owns the chat, the services menu, the cards, and the workflow. It delegates every step with
 `ctx.send` to separately addressed agents: Intake, Campus Researcher, Campus Rooms, Verification,
-Planner, and Memory and Audit. It accepts only results from the agent it asked, for the request it
-is waiting on, and it retries a silent step once. If a room is taken when it is re-checked, the
-Planner shows you the other open rooms.
+Planner, Memory and Audit, and Emergency Dispatcher. It accepts only results from the agent it
+asked, for the request it is waiting on, and it retries a silent step once. The demo call is the
+exception: it is never retried. If a room is taken when it is re-checked, the Planner shows you
+the other open rooms.
 
-It never takes payment, never reserves a room, and never applies for housing. Free text gets the
-services menu; it never starts a request from prose.
+It never takes payment, never reserves a room, never applies for housing, and never calls 911.
+Free text gets the services menu; it never starts a request or a call from prose.
 
 Protocols: Agent Chat Protocol, ResourcePilotTasks.

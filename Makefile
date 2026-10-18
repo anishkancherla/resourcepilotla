@@ -13,7 +13,7 @@ bootstrap-missing:
 
 start:
 	docker compose up --build -d
-	@echo "7 agents are starting. Run 'make profiles', open every Inspector URL, and connect Mailbox."
+	@echo "8 agents are starting. Run 'make profiles', open every Inspector URL, and connect Mailbox."
 
 stop:
 	docker compose down

@@ -64,8 +64,8 @@ def test_runtime_publishes_manifests_and_delegates_with_ctx_send() -> None:
     assert "from uagents_core.contrib.protocols.chat import" in RUNTIME
 
 
-def test_seven_real_agents_and_only_live_roles_fetch_the_web() -> None:
-    assert len(ALL_AGENTS) == 7
+def test_eight_real_agents_and_only_live_roles_use_the_network() -> None:
+    assert len(ALL_AGENTS) == 8
     assert [identity.key for identity in ALL_AGENTS] == [
         "orchestrator",
         "intake",
@@ -74,15 +74,22 @@ def test_seven_real_agents_and_only_live_roles_fetch_the_web() -> None:
         "verification",
         "planner",
         "memory_audit",
+        "emergency",
     ]
-    assert len({identity.port for identity in ALL_AGENTS}) == 7
+    assert len({identity.port for identity in ALL_AGENTS}) == 8
     importers = sorted(
         str(path.relative_to(ROOT))
         for path in (*ROOT.glob("agents/*.py"), *ROOT.glob("resourcepilot/*.py"))
         if "resourcepilot.http import" in path.read_text()
     )
-    # agents/run.py hosts the Researcher, Campus Rooms, and Verification's link re-checks.
-    assert importers == ["agents/run.py", "resourcepilot/research.py", "resourcepilot/rooms.py"]
+    # agents/run.py hosts the Researcher, Campus Rooms, Verification's link re-checks, and the
+    # Emergency Dispatcher, the only part that calls ElevenLabs.
+    assert importers == [
+        "agents/run.py",
+        "resourcepilot/emergency.py",
+        "resourcepilot/research.py",
+        "resourcepilot/rooms.py",
+    ]
 
 
 def test_no_payment_code_or_demo_shops_remain() -> None:

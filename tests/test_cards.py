@@ -214,12 +214,13 @@ def test_custom_card_depth_limit() -> None:
         cards.card_message("bad", "table", {})
 
 
-def test_services_menu_offers_three_services_and_bookings() -> None:
+def test_services_menu_offers_four_services_and_bookings() -> None:
     _, menu = cards.welcome_card()
     assert list(_selections(menu)) == [
         {"action": "open_service", "service": "rooms"},
         {"action": "open_service", "service": "wellness"},
         {"action": "open_service", "service": "housing"},
+        {"action": "open_service", "service": "emergency"},
         {"action": "show_bookings"},
     ]
     text = json.dumps(menu).lower()
@@ -230,7 +231,7 @@ def test_services_menu_offers_three_services_and_bookings() -> None:
     assert cards.CRISIS_TEXT in json.dumps(menu, ensure_ascii=False)
 
 
-@pytest.mark.parametrize("service", ["rooms", "wellness", "housing"])
+@pytest.mark.parametrize("service", ["rooms", "wellness", "housing", "emergency"])
 def test_every_form_submits_its_own_service(service) -> None:
     _, form = cards.service_form(service)
     for field in form["fields"]:
@@ -238,8 +239,10 @@ def test_every_form_submits_its_own_service(service) -> None:
             assert field["options"]
     assert form["submit_cta"]["selection"] == {"action": "submit_form", "service": service}
     email = [field for field in form["fields"] if field["name"] == "email"]
-    assert len(email) == 1
-    assert email[0]["required"] is True
+    # The demo drill needs no school email, and no form ever asks for a phone number.
+    assert len(email) == (0 if service == "emergency" else 1)
+    assert not [field for field in form["fields"] if "phone" in field["name"]]
+    assert all(field["required"] is True for field in email)
 
 
 def test_rooms_form_offers_days_windows_durations_and_group_size() -> None:
@@ -392,7 +395,7 @@ def test_progress_card_marks_finished_and_current_stages() -> None:
     assert len(recheck["root"]["children"]) == 3  # no step list outside a chain
 
 
-def test_known_actions_cover_the_room_flow_only() -> None:
+def test_known_actions_cover_the_room_and_demo_call_flows_only() -> None:
     assert set(cards.KNOWN_ACTIONS) == {
         "start_over",
         "open_service",
@@ -403,10 +406,13 @@ def test_known_actions_cover_the_room_flow_only() -> None:
         "recheck_room",
         "show_results",
         "submit_link",
+        "place_call",
+        "call_status",
         "open_orchestrator",
     }
     assert set(cards.PROSE_ACTIONS) <= set(cards.KNOWN_ACTIONS)
-    assert not {"submit_form", "recheck_room", "submit_link"} & set(cards.PROSE_ACTIONS)
+    consequential = {"submit_form", "recheck_room", "submit_link", "place_call"}
+    assert not consequential & set(cards.PROSE_ACTIONS)
 
 
 def test_direct_json_selection_is_parsed_before_prose() -> None:
@@ -458,7 +464,7 @@ def test_cards_module_has_no_bundle_or_payment_surface() -> None:
         "demo_control_buttons",
     )
     assert not [name for name in removed if hasattr(cards, name)]
-    assert set(cards.SERVICE_TITLES) == {"rooms", "wellness", "housing"}
+    assert set(cards.SERVICE_TITLES) == {"rooms", "wellness", "housing", "emergency"}
     source = (ROOT / "resourcepilot" / "cards.py").read_text()
     for module in ("pricing", "registry", "bundles", "logistics", "escrow", "payment"):
         assert f"resourcepilot.{module}" not in source
@@ -501,3 +507,37 @@ def test_wellness_card_rooms_use_stable_option_ids() -> None:
 def test_wellness_prose_only_opens_the_form() -> None:
     for text in ("any wellness events?", "I need a meditation space", "flu shot near me"):
         assert cards.parse_selection(text) == {"action": "open_service", "service": "wellness"}
+
+
+PREVIEW = {
+    "to": "\u2022\u2022\u2022\u2022 0142",
+    "opening": "Hello, this is a ResourcePilot demo drill, not a real emergency.",
+    "rows": [("Calling", "Your demo contact (\u2022\u2022\u2022\u2022 0142), not 911")],
+}
+
+
+def test_emergency_cards_say_not_911_and_only_a_button_places_the_call() -> None:
+    _, form = cards.emergency_form()
+    assert "never 911" in form["title"]
+    kind, review = cards.emergency_review_card("wf-9", PREVIEW)
+    cards.card_message("x", kind, review)
+    assert review["approve_cta"]["selection"] == {"action": "place_call", "workflow_id": "wf-9"}
+    assert "never 911" in json.dumps(review, ensure_ascii=False)
+    call = {"to": "\u2022\u2022\u2022\u2022 0142", "conversation_id": "conv_1"}
+    status = {
+        "status_label": "Call ended",
+        "duration": "1:15",
+        "summary": "Reported a fainting.",
+        "transcript": [{"speaker": "Dispatcher", "message": "What is your location?"}],
+    }
+    for payload in (
+        cards.emergency_call_card("wf-9", call),
+        cards.emergency_call_card("wf-9", call, status),
+    ):
+        kind, card = payload
+        cards.card_message("x", kind, card)
+        encoded = json.dumps(card, ensure_ascii=False)
+        assert cards.DEMO_NOTICE in encoded and "0142" in encoded
+    assert "What is your location?" in encoded
+    for text in ("call now", "place the call", "emergency call 911 now"):
+        assert cards.parse_selection(text).get("action") != "place_call"

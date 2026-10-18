@@ -1,8 +1,9 @@
 """ASI:One cards for every Orchestrator reply, plus profile status cards for every agent.
 
-ResourcePilot offers three campus services from a menu: free study rooms at the student's own
+ResourcePilot offers four campus services from a menu: free study rooms at the student's own
 school, health and wellness (quiet rooms, the week's wellness events, and the 988 crisis line),
-and campus housing facts with official links. Every reply is a card: the menu, a short form,
+campus housing facts with official links, and an emergency demo drill that phones one teammate,
+never 911. Every reply is a card: the menu, a short form,
 progress, a carousel of open rooms, the wellness card, a room detail, the booking-link receipt,
 the housing card, and recent bookings. ResourcePilot never reserves a room or applies for
 housing, so no card asks for payment.
@@ -79,10 +80,13 @@ KNOWN_ACTIONS = (
     "recheck_room",
     "show_results",
     "submit_link",
+    "place_call",
+    "call_status",
     "open_orchestrator",
 )
 # Bounded allowlist for planner-mediated prose: it only opens menus and views. Submitting a form,
-# re-checking a room, or submitting a link needs the stable IDs that only a card selection carries.
+# re-checking a room, submitting a link, or placing a demo call needs the stable IDs that only a
+# card selection carries.
 PROSE_ACTIONS = ("open_orchestrator", "show_status", "show_results", "show_bookings", "start_over")
 # Prose that only opens a service's form, never submits one.
 SERVICE_WORDS = (
@@ -101,11 +105,17 @@ SERVICE_TITLES = {
     "rooms": "Study rooms",
     "wellness": "Health & wellness",
     "housing": "Campus housing",
+    "emergency": "Emergency (demo)",
 }
 # Static on purpose: crisis help never depends on a crawl, a feed, or a school being found.
 CRISIS_TEXT = (
     "In crisis? Call or text 988, the Suicide & Crisis Lifeline, any time. "
     "In an emergency, call 911."
+)
+# On every emergency card: the drill must never be mistaken for a real call for help.
+DEMO_NOTICE = (
+    "Demo drill: this calls your team's demo contact, never 911 or campus police. "
+    "In a real emergency, call 911."
 )
 HOW_ROOMS_WORK = (
     "ResourcePilot re-checks the room live, then you book it on your school's site with your "
@@ -341,6 +351,14 @@ SERVICES_MENU = (
         "Dorm beds, typical room and board, and meal plans, plus your housing office and "
         "application portal. You apply on your school's site.",
     ),
+    (
+        "emergency",
+        "Emergency (demo)",
+        "Demo drill · not 911",
+        "warning",
+        "Practice reporting a campus emergency: a voice agent phones your team's demo contact "
+        "and describes it. It never calls 911. In a real emergency, call 911.",
+    ),
 )
 
 
@@ -479,6 +497,35 @@ def wellness_form(days: list[tuple[str, str]] | None = None) -> tuple[str, dict[
     }
 
 
+def emergency_form() -> tuple[str, dict[str, Any]]:
+    """The drill's facts. No phone number field: only the configured demo contact is called."""
+    return "form", {
+        "title": f"Emergency demo drill. {DEMO_NOTICE}",
+        "fields": [
+            _select(
+                "kind",
+                "What is happening",
+                [
+                    ("medical", "Medical"),
+                    ("fire", "Fire or smoke"),
+                    ("danger", "Someone in danger"),
+                    ("other", "Other"),
+                ],
+                required=True,
+            ),
+            {"name": "location", "kind": "text", "label": "Where on campus", "required": True},
+            _select("people", "People who need help", [(str(n), str(n)) for n in range(1, 11)]),
+            {"name": "details", "kind": "text", "label": "Anything else (optional)"},
+            _select("caller_safe", "Are you safe right now?", [("yes", "Yes"), ("no", "No")]),
+            {"name": "school", "kind": "text", "label": "School (optional)"},
+        ],
+        "submit_cta": {
+            "label": "Review the demo call",
+            "selection": {"action": "submit_form", "service": "emergency"},
+        },
+    }
+
+
 def housing_form() -> tuple[str, dict[str, Any]]:
     return "form", {
         "title": "Housing at your school",
@@ -496,6 +543,8 @@ def service_form(service: str) -> tuple[str, dict[str, Any]]:
         return housing_form()
     if service == "wellness":
         return wellness_form()
+    if service == "emergency":
+        return emergency_form()
     return rooms_form()
 
 
@@ -548,6 +597,9 @@ STAGE_LABELS = {
     "planner": "Ranking open rooms",
     "recheck": "Re-checking your room",
     "link": "Waiting for a link",
+    "emergency": "Preparing the demo call",
+    "call": "Placing the demo call",
+    "call_status": "Checking the call",
 }
 
 
@@ -873,6 +925,88 @@ def wellness_card(workflow_id: str, data: dict[str, Any]) -> tuple[str, dict[str
     return "custom", {
         "root": {"type": "section", "title": f"Health & wellness at {name}", "children": children}
     }
+
+
+def emergency_review_card(workflow_id: str, preview: dict[str, Any]) -> tuple[str, dict[str, Any]]:
+    """What will be said and to whom, before anything is dialed. Only "Call now" places it."""
+    rows = [{"label": str(label), "value": str(value)} for label, value in preview.get("rows", [])]
+    rows.append({"label": "Opening line", "value": str(preview.get("opening") or "")})
+    rows.append({"label": "Not 911", "value": DEMO_NOTICE})
+    return "review", {
+        "title": "Review the demo call",
+        "summary_rows": rows,
+        "approve_cta": {
+            "label": "Call now",
+            "primary": True,
+            "selection": {"action": "place_call", "workflow_id": workflow_id},
+        },
+        "reject_cta": {"label": "Cancel", "selection": {"action": "start_over"}},
+    }
+
+
+def emergency_call_card(
+    workflow_id: str, call: dict[str, Any], status: dict[str, Any] | None = None
+) -> tuple[str, dict[str, Any]]:
+    """The placed demo call, and once checked, its status, summary, and transcript."""
+    children: list[dict[str, Any]] = [
+        {"type": "badge", "label": "Demo drill · not 911", "variant": "warning"},
+        {"type": "text", "value": DEMO_NOTICE, "style": "body"},
+        {
+            "type": "text",
+            "value": f"Calling your demo contact ({call.get('to') or 'not shown'}).",
+            "style": "body",
+        },
+    ]
+    if status:
+        children.append(
+            {
+                "type": "text",
+                "value": f"{status.get('status_label') or 'Checking the call'} · "
+                f"{status.get('duration') or '0:00'}",
+                "style": "muted",
+            }
+        )
+        if status.get("summary"):
+            children.extend(
+                [
+                    {"type": "heading", "value": "Summary", "level": 3},
+                    {"type": "text", "value": str(status["summary"]), "style": "body"},
+                ]
+            )
+        lines = list(status.get("transcript") or [])
+        if lines:
+            children.append({"type": "heading", "value": "Transcript", "level": 3})
+            children.append(
+                {
+                    "type": "list",
+                    "items": [
+                        {
+                            "children": [
+                                {"type": "text", "value": str(line["speaker"]), "style": "muted"},
+                                {"type": "text", "value": str(line["message"]), "style": "body"},
+                            ]
+                        }
+                        for line in lines
+                    ],
+                }
+            )
+    else:
+        children.append(
+            {
+                "type": "text",
+                "value": "Put the demo phone on speaker. Check the call for its transcript.",
+                "style": "muted",
+            }
+        )
+    children.append(
+        _buttons(
+            [
+                ("Check the call", {"action": "call_status", "workflow_id": workflow_id}),
+                ("Menu", {"action": "start_over"}),
+            ]
+        )
+    )
+    return "custom", {"root": {"type": "section", "title": "Demo call", "children": children}}
 
 
 def _booking_row(booking: dict[str, Any]) -> dict[str, str]:

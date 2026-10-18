@@ -48,7 +48,7 @@ class AgentIdentity:
         return value
 
 
-# Seven real uAgents, each its own process run by agents/run.py with AGENT_ROLE=<key>.
+# Eight real uAgents, each its own process run by agents/run.py with AGENT_ROLE=<key>.
 # Seeds and addresses are keyed by `key`, so identities in an existing .env stay valid.
 PLATFORM_ROLES: Final[tuple[AgentIdentity, ...]] = (
     AgentIdentity(
@@ -93,17 +93,26 @@ PLATFORM_ROLES: Final[tuple[AgentIdentity, ...]] = (
         "Keeps the append-only audit timeline and your recent bookings",
         8006,
     ),
+    AgentIdentity(
+        "emergency",
+        "ResourcePilot Emergency Dispatcher",
+        "Places one demo-drill call to your team's demo contact, never 911, and reports the "
+        "transcript",
+        8007,
+    ),
 )
 
 ALL_AGENTS: Final = PLATFORM_ROLES
 ROLE_BY_KEY: Final = {role.key: role for role in PLATFORM_ROLES}
 
 # The sequential pipelines, one per campus service.
-SERVICES: Final = ("rooms", "wellness", "housing")
+SERVICES: Final = ("rooms", "wellness", "housing", "emergency")
 SERVICE_CHAINS: Final[dict[str, tuple[str, ...]]] = {
     "rooms": ("intake", "researcher", "campus_rooms", "verification", "planner"),
     "wellness": ("intake", "researcher", "campus_rooms", "verification", "planner"),
     "housing": ("intake", "researcher", "verification"),
+    # The demo call: the Dispatcher validates the form; the call itself waits for "Call now".
+    "emergency": ("emergency",),
 }
 SPECIALISTS: Final = frozenset(role for chain in SERVICE_CHAINS.values() for role in chain)
 

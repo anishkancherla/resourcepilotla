@@ -90,11 +90,12 @@ async def begin_workflow(
 ) -> TaskRequest:
     workflow_id = str(uuid4())
     service = str(request.get("service") or "rooms")
+    first = service_chain(service)[0]
     task = make_task(
         workflow_id=workflow_id,
         requester=requester,
         session_id=session_id,
-        target_role="intake",
+        target_role=first,
         payload=request,
     )
     await store.create_workflow(
@@ -104,7 +105,7 @@ async def begin_workflow(
             "requester": requester,
             "session_id": session_id,
             "service": service,
-            "stage": "intake",
+            "stage": first,
             "status": "running",
             "expected_request_id": task.request_id,
             "deadline_at": task.deadline_at,
@@ -144,12 +145,14 @@ async def accept_result(
     index = chain.index(result.source_role)
     if index == len(chain) - 1:
         # A chain that ends at Verification (housing, wellness without rooms) is an answer; one
-        # that ends at the Planner has options to pick from.
-        done = (
-            {"status": "answered", "stage": "complete"}
-            if chain[-1] == "verification"
-            else {"status": "awaiting_selection", "stage": "selection"}
-        )
+        # that ends at the Planner has options to pick from. The emergency preview waits for the
+        # student to press "Call now".
+        if service == "emergency":
+            done = {"status": "awaiting_call", "stage": "review"}
+        elif chain[-1] == "verification":
+            done = {"status": "answered", "stage": "complete"}
+        else:
+            done = {"status": "awaiting_selection", "stage": "selection"}
         return None, await store.patch_workflow(
             result.workflow_id, {**done, "data": result.payload}
         )
@@ -193,23 +196,39 @@ async def advance_to(
     return task, state
 
 
-async def accept_recheck(store: DurableStore, result: TaskResult) -> dict[str, Any] | None:
-    """Accept Campus Rooms' answer to a live re-check once, and only for the active re-check.
+# Steps outside a service's chain, and the one role allowed to answer each.
+SIDE_STAGES: dict[str, str] = {
+    "recheck": "campus_rooms",
+    "call": "emergency",
+    "call_status": "emergency",
+}
 
-    Correlation is checked before the claim, so a forged or misrouted result can never use up
-    the claim that the genuine answer needs.
+
+async def accept_side_result(store: DurableStore, result: TaskResult) -> dict[str, Any] | None:
+    """Accept the answer to an out-of-chain step once, and only for the active step.
+
+    That is a live re-check from Campus Rooms, or a demo call or call-status read from the
+    Emergency Dispatcher. Correlation is checked before the claim, so a forged or misrouted
+    result can never use up the claim that the genuine answer needs.
     """
     state = await store.get_workflow(result.workflow_id)
     if (
         state is None
-        or state["stage"] != "recheck"
+        or SIDE_STAGES.get(str(state["stage"])) != result.source_role
         or state["expected_request_id"] != result.request_id
-        or result.source_role != "campus_rooms"
     ):
         return None
     if not await store.claim("task_result", result.request_id):
         return None
     return state
+
+
+async def accept_recheck(store: DurableStore, result: TaskResult) -> dict[str, Any] | None:
+    """Accept Campus Rooms' answer to a live re-check once, and only for the active re-check."""
+    state = await store.get_workflow(result.workflow_id)
+    if state is None or state["stage"] != "recheck":
+        return None
+    return await accept_side_result(store, result)
 
 
 def is_timed_out(state: dict[str, Any], *, now: datetime | None = None) -> bool:

@@ -8,7 +8,7 @@ The relay is the container's published port. It forwards bytes to the uAgent on 
 same network namespace, preserving the framework's local-only security check. Compose also binds
 every published host port to 127.0.0.1 only.
 
-AGENT_MODULE picks the runtime: ``agents.run``, which runs every one of the seven agents
+AGENT_MODULE picks the runtime: ``agents.run``, which runs every one of the eight agents
 (selected by AGENT_ROLE).
 """
 

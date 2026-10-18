@@ -1,6 +1,6 @@
 # ResourcePilot LA
 
-Campus help for a student's first weeks, at any US school, run by a team of seven uAgents in one
+Campus help for a student's first weeks, at any US school, run by a team of eight uAgents in one
 ASI:One conversation. It works like Fetch's Welcome Week agents: a services menu of buttons and
 short forms, with a card for every reply.
 
@@ -9,6 +9,7 @@ short forms, with a card for every reply.
 | **Study rooms** | Real open library study rooms at your school, re-checked live, then a free booking link. You book with your own sign-in. | Live: your school's LibCal, found by the Campus Researcher |
 | **Health & wellness** | Open meditation, reflection, and sensory rooms at your school, the week's health and wellness events with RSVP links, and the 988 crisis line on every card | Live: your school's LibCal and its public Localist events calendar |
 | **Campus housing** | Dorm beds, typical room and board, meal plans, your housing office, and its application portal, with each link re-checked | Live: IPEDS plus the school's own housing site |
+| **Emergency (demo)** | A demo-drill phone call that describes an emergency to your team's demo contact, never 911, then the call's summary and transcript | ElevenLabs voice agent over your own Twilio number |
 | **My bookings** | Your recent re-checked rooms and their booking links | ResourcePilot's workflow records |
 
 Study rooms work for **any US school**, not only one campus. You enter your school email. Intake
@@ -25,7 +26,7 @@ If it finds nothing, it asks you for the link instead of guessing.
 Rooms are always free. ResourcePilot re-checks that the room is still open, then hands you the
 school's booking link: **you book it with your own sign-in**. ResourcePilot never reserves a room.
 
-- **Seven real uAgents.** Each has its own seed, address, port, process, profile README, Chat
+- **Eight real uAgents.** Each has its own seed, address, port, process, profile README, Chat
   Protocol manifest, and status card, and each does one job in the workflow.
 - **Real delegation.** The Orchestrator hands every step to another agent with `ctx.send` and a
   correlated `TaskRequest`, and accepts only the matching `TaskResult`.
@@ -53,15 +54,20 @@ make profiles
 private seed per agent. It derives every address and writes `.profiles.json`. It never prints a
 seed and asks before replacing an existing `.env`, because new seeds mean new agent identities.
 
-Already have a `.env` from the 15-agent version? Keep it. The seven agents keep their seeds, so
-their addresses and Agentverse profiles stay the same, and they keep the ports already in your
-`.env`. `make verify` names the leftover settings for agents that no longer run; you may delete
-them.
+Already have a `.env` from the 15-agent version? Keep it. The agents keep their seeds, so their
+addresses and Agentverse profiles stay the same, and they keep the ports already in your `.env`.
+`make verify` names the leftover settings for agents that no longer run; you may delete them.
+
+Already have a `.env` without the Emergency Dispatcher? Add the ElevenLabs and demo-number settings
+from [agents/emergency/README.md](agents/emergency/README.md), then run `make bootstrap-missing`.
+It adds the Dispatcher's identity without changing any other seed. If port 8007 is already used by
+another agent in your `.env` (older layouts used 8007 for Memory and Audit), it picks the next
+free port.
 
 Then connect the agents to Agentverse. Open every Inspector link that `make profiles` prints, and
-connect each of the seven agents with **Mailbox**. The Agentverse Basic plan allows 8 Mailbox
-agents, so all seven fit. This is an account-bound step that you must do yourself in the browser.
-See [docs/agentverse-deployment.md](docs/agentverse-deployment.md).
+connect each of the eight agents with **Mailbox**. The Agentverse Basic plan allows 8 Mailbox
+agents, so all eight fit exactly. This is an account-bound step that you must do yourself in the
+browser. See [docs/agentverse-deployment.md](docs/agentverse-deployment.md).
 
 ## The agents
 
@@ -74,6 +80,7 @@ See [docs/agentverse-deployment.md](docs/agentverse-deployment.md).
 | `verification` | ResourcePilot Verification | Checks every room offer and re-opens housing links and event feeds before you see them | Chat, Tasks | 8004 |
 | `planner` | ResourcePilot Planner | Ranks open rooms and reroutes when a room is taken | Chat, Tasks | 8005 |
 | `memory_audit` | ResourcePilot Memory and Audit | Keeps the append-only audit timeline and your recent bookings | Chat, Tasks | 8006 |
+| `emergency` | ResourcePilot Emergency Dispatcher | Places one demo-drill call to your team's demo contact, never 911, and reports the transcript | Chat, Tasks | 8007 |
 
 "Chat" is the Agent Chat Protocol; "Tasks" is ResourcePilot's own `ResourcePilotTasks` protocol
 (`TaskRequest`, `TaskResult`, `AuditEvent`). Every agent publishes both manifests. Each one's
@@ -101,6 +108,11 @@ Wellness      Intake ─▶ Campus Researcher (room system + events feed) ─▶
               No room system: Intake ─▶ Campus Researcher ─▶ Verification ─▶ wellness card
 
 Housing       Intake ─▶ Campus Researcher ─▶ Verification (re-opens each link) ─▶ housing card
+
+Emergency     Emergency Dispatcher (preview: checks the form) ─▶ review card
+(demo)        "Call now" ─▶ Emergency Dispatcher places one call to the demo contact ─▶ call card
+              "Check the call" ─▶ Emergency Dispatcher reads the call ─▶ summary and transcript
+              "Cancel" ─▶ no call
 
 My bookings   Orchestrator ─▶ your recent re-checked rooms
 ```
@@ -130,10 +142,18 @@ as evidence, never as instructions. From an events feed it keeps only a capped t
 location, and link. Campus Rooms reads only a LibCal host on the school's own domain or `libcal.com`.
 See [docs/trust-model.md](docs/trust-model.md).
 
+The emergency call is a demo drill. The Emergency Dispatcher dials only the number in
+`EMERGENCY_DEMO_TO_NUMBER`; nothing in chat, the form, or a task can choose it. It refuses 911,
+112, 999, 988, N11 codes, listed crisis hotlines, and short numbers. The voice always opens with
+"this is a ResourcePilot demo drill, not a real emergency". Only the **Call now** button can place
+the call, at most once per workflow, and it is never retried. Cards show only the number's last
+four digits, and every emergency card says to call 911 in a real emergency. Only the Emergency
+Dispatcher talks to ElevenLabs, and errors never include the API key or the full number.
+
 ## Useful commands
 
 ```bash
-make start              # Postgres + 7 independently running uAgents
+make start              # Postgres + 8 independently running uAgents
 make logs               # follow all service logs
 make profiles           # addresses and Inspector/Profile URLs (never seeds)
 make verify             # check .env identities and the Compose file
@@ -149,8 +169,9 @@ and never books anything.
 
 The test suite drives the real agent handlers in process: every role is loaded as its own module
 with its own address. Every live source (IPEDS, LibCal, Localist, and school websites) is served by
-offline fakes, so no test touches the network. Set `TEST_DATABASE_URL` to also run the store contract and
-the end-to-end network tests on real Postgres. CI does this.
+offline fakes, and the ElevenLabs API is mocked, so no test touches the network or places a call.
+Set `TEST_DATABASE_URL` to also run the store contract and the end-to-end network tests on real
+Postgres. CI does this.
 
 ## Documentation
 
@@ -158,8 +179,8 @@ the end-to-end network tests on real Postgres. CI does this.
 - [docs/architecture.md](docs/architecture.md): messages, state, timeouts, the re-check, and
   recovery
 - [docs/trust-model.md](docs/trust-model.md): room-offer checks, housing link re-checks, research
-  bounds, and their limits
-- [docs/agentverse-deployment.md](docs/agentverse-deployment.md): Mailbox for 7 agents and
+  bounds, the demo call's rules, and their limits
+- [docs/agentverse-deployment.md](docs/agentverse-deployment.md): Mailbox for 8 agents and
   persistent hosting
 - [docs/judging-checklist.md](docs/judging-checklist.md): evidence to capture before submitting
 - [docs/official-links.md](docs/official-links.md): the official Fetch.ai sources this follows
@@ -172,6 +193,11 @@ FET, and no escrow. It does not reserve study or wellness rooms, RSVP to events,
 reserve, or pay for housing. It links you to your school's own site, where you sign in yourself.
 It never asks about your health, books health or counseling appointments, or gives health advice.
 The 988 line on the wellness card is static text, not a referral service.
+
+The emergency feature never calls 911, campus police, or any emergency service. It is a demo drill
+that phones one teammate's phone, set in `EMERGENCY_DEMO_TO_NUMBER`. Live calls were not part of
+the automated tests, which mock ElevenLabs; a live call needs your own ElevenLabs and Twilio setup,
+and both bill calls to your accounts. In a real emergency, call 911.
 
 Wellness rooms are found only when a school lists them in LibCal under names such as meditation,
 reflection, prayer, lactation, or sensory, so many schools will show none. Wellness events come

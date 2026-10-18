@@ -12,7 +12,7 @@ manifest = ROOT / ".profiles.json"
 if not manifest.exists():
     raise SystemExit("Run `make bootstrap` first.")
 
-# Older manifests may also list agents that no longer run; show only the current seven.
+# Older manifests may also list agents that no longer run; show only the current eight.
 profiles = {profile.get("key"): profile for profile in json.loads(manifest.read_text())["agents"]}
 print(f"ResourcePilot agents ({len(ALL_AGENTS)})")
 for identity in ALL_AGENTS:
