@@ -209,3 +209,30 @@ async def test_advance_to_hands_the_workflow_to_the_next_role() -> None:
     assert planner.target_role == "planner"
     assert (state["stage"], state["status"]) == ("planner", "running")
     assert state["expected_request_id"] == planner.request_id
+
+
+async def test_wellness_without_a_room_system_skips_campus_rooms_and_answers() -> None:
+    store = MemoryStore()
+    fields = {"school_domain": "mit.edu", "day": SEARCH_DAY.isoformat(), "window": "any"}
+    task = await start(store, {"service": "wellness", "fields": {**fields, "duration": "30"}})
+    intake = execute_specialist("intake", task)
+    assert intake.ok, intake.error
+    research, _ = await accept_result(store, intake)
+    assert research is not None
+    no_rooms = {**research.payload, "rooms": {"status": "needs_link"}, "wellness": {}}
+    verify, _ = await accept_result(store, reply(research, no_rooms))
+    assert verify is not None and verify.target_role == "verification"
+    done, state = await accept_result(store, reply(verify, verify.payload))
+    assert done is None
+    assert (state["status"], state["stage"]) == ("answered", "complete")
+
+
+async def test_wellness_with_a_room_system_goes_to_campus_rooms() -> None:
+    store = MemoryStore()
+    fields = {"school_domain": "purdue.edu", "day": SEARCH_DAY.isoformat(), "window": "any"}
+    task = await start(store, {"service": "wellness", "fields": {**fields, "duration": "30"}})
+    research, _ = await accept_result(store, execute_specialist("intake", task))
+    assert research is not None
+    found = {**research.payload, "rooms": {"status": "found"}, "wellness": {}}
+    rooms, _ = await accept_result(store, reply(research, found))
+    assert rooms is not None and rooms.target_role == "campus_rooms"

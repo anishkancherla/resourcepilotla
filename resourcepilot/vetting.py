@@ -9,8 +9,9 @@ before the Planner ranks it:
 3. A live time slot sits inside the window the student asked for.
 4. A listed capacity seats the whole group.
 
-Housing links are re-opened separately (``research.recheck_link``), because that check is a
-network call.
+Housing links and wellness event feeds are re-checked separately (``research.recheck_link`` and
+``research.recheck_events``), because those checks are network calls. Rooms are optional on the
+wellness card, so a wellness search with no acceptable room keeps the reason instead of failing.
 """
 
 from __future__ import annotations
@@ -81,6 +82,10 @@ def verification_handler(payload: dict[str, Any], context: dict[str, Any]) -> di
     brief = dict(payload["brief"])
     campus = dict(payload.get("campus") or {})
     accepted, rejections = vet_room_offers(brief, list(payload.get("offers", [])), campus)
+    if brief.get("service") == "wellness":
+        # Rooms are optional on the wellness card: say why there are none instead of failing.
+        note = "" if accepted else (rejections[0]["reason"] if rejections else "")
+        return {**payload, "offers": accepted, "rejections": rejections, "room_note": note}
     if not accepted:
         raise ValueError(rejections[0]["reason"] if rejections else NO_ROOM)
     return {**payload, "offers": accepted, "rejections": rejections}

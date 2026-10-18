@@ -5,7 +5,9 @@ chat and the workflow, and delegates every step with ``ctx.send``; specialists r
 correlated TaskResults. Study rooms: Intake, then the Campus Researcher (finds the school's room
 system), Campus Rooms (reads open rooms live), Verification, and the Planner. Before handing over a
 booking link, Campus Rooms re-checks that room live; a room that was just taken sends the Planner
-back to the other open rooms. Housing: Intake, the Campus Researcher, then Verification, which
+back to the other open rooms. Health and wellness runs the same chain for wellness rooms, plus
+the Researcher's events feed, which Verification re-fetches; a school with no room system skips
+Campus Rooms and the Planner. Housing: Intake, the Campus Researcher, then Verification, which
 re-opens every official link. ResourcePilot never reserves a room and takes no payments.
 """
 
@@ -40,7 +42,7 @@ from resourcepilot.config import (
 from resourcepilot.http import Http, ProviderError, build_http
 from resourcepilot.intake import scrub_fields
 from resourcepilot.models import AuditEvent, HealthResponse, TaskRequest, TaskResult
-from resourcepilot.research import recheck_link, research
+from resourcepilot.research import recheck_events, recheck_link, research
 from resourcepilot.rooms import campus_rooms_handler
 from resourcepilot.store import store
 from resourcepilot.workflow import (
@@ -208,6 +210,8 @@ async def handle_chat(ctx: Context, sender: str, message: ChatMessage) -> None:
 
 FORM_PROMPTS = {
     "rooms": "Enter your school email and when you need a room. Only the domain is kept.",
+    "wellness": "Enter your school email and when you'd like a quiet room. Only the domain is "
+    "kept. In crisis? Call or text 988.",
     "housing": "Enter your school email. Only the domain is kept.",
 }
 FIELD_LIMIT = 200
@@ -304,11 +308,18 @@ def _school_name(state: dict[str, Any]) -> str:
     return str(state.get("data", {}).get("school", {}).get("school_name") or "your school")
 
 
+def _wellness(state: dict[str, Any]) -> bool:
+    return state.get("service") == "wellness"
+
+
 async def _show_rooms(ctx: Context, sender: str, state: dict[str, Any], *, note: str = "") -> None:
+    prefix = f"{note} " if note else ""
+    if _wellness(state):
+        await _show_wellness(ctx, sender, state, prefix=prefix)
+        return
     options = list(state["data"].get("options", []))
     school = _school_name(state)
     count = len(options)
-    prefix = f"{note} " if note else ""
     await _send_card(
         ctx,
         sender,
@@ -319,9 +330,10 @@ async def _show_rooms(ctx: Context, sender: str, state: dict[str, Any], *, note:
 
 
 async def _send_link(ctx: Context, sender: str, state: dict[str, Any], narration: str) -> None:
-    await _send_card(
-        ctx, sender, narration, cards.room_link_receipt(dict(state["option"])), terminal=True
+    receipt = cards.room_link_receipt(
+        dict(state["option"]), service=str(state.get("service") or "rooms")
     )
+    await _send_card(ctx, sender, narration, receipt, terminal=True)
 
 
 async def _workflow_action(
@@ -342,7 +354,7 @@ async def _workflow_action(
         elif state["status"] == "awaiting_link":
             await _ask_for_link(ctx, sender, state)
         elif state["status"] == "answered":
-            await _show_housing(ctx, sender, state)
+            await _show_answer(ctx, sender, state)
         elif state["status"] == "awaiting_selection":
             await _show_rooms(ctx, sender, state)
         elif state["status"] == "booked":
@@ -375,7 +387,7 @@ async def _workflow_action(
             ctx,
             sender,
             f"{option['lines'][0]['name']}: free, re-checked live before you book.",
-            cards.room_detail(workflow_id, option),
+            cards.room_detail(workflow_id, option, wellness=_wellness(state)),
         )
         return
     if action == "recheck_room" and option:
@@ -393,16 +405,35 @@ async def _workflow_action(
 
 
 def _chain(state: dict[str, Any]) -> tuple[str, ...]:
-    return service_chain(str(state.get("service") or "rooms"))
+    return service_chain(str(state.get("service") or "rooms"), state.get("data") or {})
 
 
-async def _show_housing(ctx: Context, sender: str, state: dict[str, Any]) -> None:
+async def _show_answer(ctx: Context, sender: str, state: dict[str, Any]) -> None:
+    """A finished lookup with nothing to pick: housing, or wellness without a room system."""
+    if _wellness(state):
+        await _show_wellness(ctx, sender, state)
+        return
     await _send_card(
         ctx,
         sender,
         f"Housing at {_school_name(state)}: official facts and links. "
         "You apply on the school's site.",
         cards.housing_card(state["data"]),
+    )
+
+
+async def _show_wellness(
+    ctx: Context, sender: str, state: dict[str, Any], *, prefix: str = ""
+) -> None:
+    data = state["data"]
+    rooms = len(data.get("options") or [])
+    events = len((data.get("wellness") or {}).get("events") or [])
+    await _send_card(
+        ctx,
+        sender,
+        f"{prefix}Wellness at {_school_name(state)}: {rooms} open room{'s' if rooms != 1 else ''} "
+        f"and {events} event{'s' if events != 1 else ''} this week. In crisis? Call or text 988.",
+        cards.wellness_card(str(state["workflow_id"]), data),
     )
 
 
@@ -576,8 +607,12 @@ async def handle_task(ctx: Context, sender: str, task: TaskRequest) -> None:
     if ROLE.key in LIVE_ROLES:
         await ctx.send(sender, await _live_task(task))
         return
-    if ROLE.key == "verification" and task.payload.get("brief", {}).get("service") == "housing":
+    service = task.payload.get("brief", {}).get("service")
+    if ROLE.key == "verification" and service == "housing":
         await ctx.send(sender, await _verify_housing(task))
+        return
+    if ROLE.key == "verification" and service == "wellness":
+        await ctx.send(sender, await _verify_wellness(task))
         return
     if ROLE.key not in SPECIALISTS:
         return
@@ -611,6 +646,19 @@ async def _verify_housing(task: TaskRequest) -> TaskResult:
             housing[key] = ""
     housing["unverified"] = dropped
     return task_result(task, "verification", ok=True, payload={**payload, "housing": housing})
+
+
+async def _verify_wellness(task: TaskRequest) -> TaskResult:
+    """Vet Campus Rooms' wellness offers, if any, then re-fetch the events feed independently."""
+    vetted = execute_specialist("verification", task)
+    if not vetted.ok:
+        return vetted
+    payload = dict(vetted.payload)
+    school = {str(k): str(v) for k, v in dict(payload.get("school") or {}).items()}
+    wellness = dict(payload.get("wellness") or {})
+    if school.get("domain"):
+        wellness = await recheck_events(_http(), wellness, school)
+    return task_result(task, "verification", ok=True, payload={**payload, "wellness": wellness})
 
 
 @task_proto.on_message(model=TaskResult)
@@ -655,7 +703,7 @@ async def handle_task_result(ctx: Context, sender: str, result: TaskResult) -> N
     elif state["status"] == "awaiting_link":
         await _ask_for_link(ctx, result.requester, state)
     elif state["status"] == "answered":
-        await _show_housing(ctx, result.requester, state)
+        await _show_answer(ctx, result.requester, state)
     elif state["status"] == "awaiting_selection":
         await _show_rooms(ctx, result.requester, state)
     elif state["status"] == "failed":

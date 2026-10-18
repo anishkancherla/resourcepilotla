@@ -19,6 +19,7 @@ from resourcepilot.rooms import (
     parse_libcal_resources,
     recheck_room,
     study_spaces,
+    wellness_spaces,
 )
 
 ZONE = ZoneInfo("America/Indiana/Indianapolis")
@@ -38,9 +39,12 @@ def test_libcal_rooms_and_open_runs_parse_from_public_pages() -> None:
         (101, "HSSE 2101", 6),
         (102, "WALC 3138", 2),
         (103, "Bernette b64 Serger", 0),
+        (104, "Meditation Room", 1),
     ]
     assert rooms[2]["grouping"] == "Knowledge Lab Specialty Textile Machines"
     assert [room["eid"] for room in study_spaces(rooms, 1)] == [101, 102]  # no serger
+    # A meditation room is never offered as a study room, and a wellness search offers nothing else.
+    assert [room["eid"] for room in wellness_spaces(rooms)] == [104]
     assert [room["eid"] for room in study_spaces(rooms, 4)] == [101]
     slots = libcal_grid(SEARCH_DAY, {"101@12:00", "101@12:30"})["slots"]
     runs = open_runs(slots, 101, SEARCH_DAY)
@@ -213,3 +217,55 @@ async def test_handler_needs_a_window_and_a_line() -> None:
         await campus_rooms_handler({"brief": {}, "campus": campus()}, fake_http())
     with pytest.raises(ValueError, match="room to re-check"):
         await campus_rooms_handler({"phase": "recheck", "campus": campus()}, fake_http())
+
+
+async def test_wellness_search_offers_only_wellness_spaces_as_free_links() -> None:
+    offers = await find_rooms(
+        fake_http(), campus(duration_minutes="30"), at(12), at(17), wellness=True
+    )
+    assert [(offer["name"], offer["item_id"]) for offer in offers] == [
+        ("Meditation Room", "libcal-9-11-104")
+    ]
+    offer = offers[0]
+    assert tuple(offer) == LINE_KEYS
+    assert offer["handoff_url"] == "https://calendar.lib.purdue.edu/space/104"
+    assert (offer["slot_start"], offer["slot_end"]) == (at(12), at(12, 30))
+
+
+async def test_wellness_search_explains_when_there_is_nothing_to_book() -> None:
+    no_spaces = await find_rooms(
+        fake_http(),
+        campus(domain="ucla.edu", libcal_host="calendar.library.ucla.edu"),
+        at(12),
+        at(17),
+        wellness=True,
+    )
+    no_libcal = await find_rooms(
+        fake_http(),
+        campus(system="page", libcal_host="", booking_url="https://lib.purdue.edu/r"),
+        at(12),
+        at(17),
+        wellness=True,
+    )
+    booked = {f"104@{hour:02d}:{minute:02d}" for hour in range(12, 17) for minute in (0, 30)}
+    full = await find_rooms(fake_http(booked=booked), campus(), at(12), at(17), wellness=True)
+    for offers, reason in (
+        (no_spaces, "No wellness rooms are listed"),
+        (no_libcal, "doesn't list wellness rooms"),
+        (full, "No wellness room at"),
+    ):
+        assert len(offers) == 1 and offers[0]["available"] is False
+        assert reason in offers[0]["unavailable_reason"]
+
+
+async def test_wellness_handler_reads_wellness_rooms_and_rechecks_them_live() -> None:
+    brief = {"service": "wellness", "window_start": at(12), "window_end": at(17)}
+    found = await campus_rooms_handler(
+        {"brief": brief, "campus": campus(duration_minutes="30")}, fake_http()
+    )
+    assert [offer["item_id"] for offer in found["offers"]] == ["libcal-9-11-104"]
+    assert await recheck_room(fake_http(), campus(), "libcal-9-11-104", at(14), at(14, 30)) is None
+    taken = await recheck_room(
+        fake_http(booked={"104@14:00"}), campus(), "libcal-9-11-104", at(14), at(14, 30)
+    )
+    assert taken == TAKEN

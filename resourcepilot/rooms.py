@@ -1,4 +1,4 @@
-"""Campus Rooms: real open library study rooms at any school, handed over as booking links.
+"""Campus Rooms: real open study and wellness rooms at any school, handed over as booking links.
 
 For LibCal schools the room list comes from the public ``/allspaces`` page and open slots from the
 ``/spaces/availability/grid`` endpoint the public booking page itself calls. That endpoint is not
@@ -58,6 +58,13 @@ NOT_STUDY = re.compile(
     re.I,
 )
 STUDY = re.compile(r"study|group|collaborat|\bpods?\b|booth|commons|meeting|discussion", re.I)
+# Spaces for rest and reflection. They are never offered as study rooms, and a wellness search
+# offers nothing else. A wellness search never asks why the student wants the room.
+WELLNESS = re.compile(
+    r"meditat|reflection|prayer|wellness|well-?being|mindful|relax|\bnap\b|lactation|"
+    r"nursing|sensory",
+    re.I,
+)
 
 
 def _js_field(block: str, name: str) -> Any:
@@ -95,7 +102,18 @@ def study_spaces(rooms: list[dict[str, Any]], group: int) -> list[dict[str, Any]
         room
         for room in rooms
         if not NOT_STUDY.search(f"{room['grouping']} {room['name']}")
+        and not WELLNESS.search(f"{room['grouping']} {room['name']}")
         and (not room["capacity"] or room["capacity"] >= group)
+    ]
+
+
+def wellness_spaces(rooms: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Meditation, reflection, sensory, and other wellness spaces; never equipment."""
+    return [
+        room
+        for room in rooms
+        if WELLNESS.search(f"{room['grouping']} {room['name']}")
+        and not NOT_STUDY.search(f"{room['grouping']} {room['name']}")
     ]
 
 
@@ -232,6 +250,11 @@ def _page_offer(campus: dict[str, str], note: str) -> dict[str, Any]:
     )
 
 
+def _not_offered(campus: dict[str, str], note: str, reason: str) -> list[dict[str, Any]]:
+    """Nothing to book: one unavailable link offer that carries the reason for the card."""
+    return [{**_page_offer(campus, note), "available": False, "unavailable_reason": reason}]
+
+
 def _room_offer(
     campus: dict[str, str],
     host: str,
@@ -262,12 +285,19 @@ def _room_offer(
 
 
 async def find_rooms(
-    http: Http, campus: dict[str, str], window_start: str, window_end: str
+    http: Http,
+    campus: dict[str, str],
+    window_start: str,
+    window_end: str,
+    *,
+    wellness: bool = False,
 ) -> list[dict[str, Any]]:
     """Open rooms in the window, earliest first; or one booking-page link when times are not live.
 
     Returns ``[]`` when the school context or its booking link cannot be trusted, and a single
-    unavailable link offer (with the reason) when LibCal shows no room open in the window.
+    unavailable link offer (with the reason) when LibCal shows no room open in the window. A
+    wellness search reads only wellness spaces, and only from LibCal: a link-only booking page
+    could not say it has any, so it gets an unavailable offer with the reason instead.
     """
     campus = dict(campus)
     if not _campus_ok(campus):
@@ -275,9 +305,16 @@ async def find_rooms(
     zone = _zone(campus)
     day, low, high = _local_window(window_start, window_end, zone)
     duration = int(campus.get("duration_minutes") or (high - low))
-    group = max(1, int(campus.get("group_size") or 1))
+    group = 1 if wellness else max(1, int(campus.get("group_size") or 1))
+    school = campus.get("school_name") or "your school"
     host = libcal_host(campus)
     if not host:
+        if wellness:
+            return _not_offered(
+                campus,
+                "No wellness rooms listed",
+                f"{school}'s room system doesn't list wellness rooms",
+            )
         if not safe_url(campus.get("booking_url", ""), campus.get("domain", "")):
             return []
         return [_page_offer(campus, "Availability isn't public")]
@@ -287,7 +324,14 @@ async def find_rooms(
         html = await http.get_text(
             f"https://{host}/allspaces", provider="LibCal", cache_ttl=DIRECTORY_TTL
         )
-        rooms = study_spaces(parse_libcal_resources(str(html)), group)
+        listed = parse_libcal_resources(str(html))
+        rooms = wellness_spaces(listed) if wellness else study_spaces(listed, group)
+        if wellness and not rooms:
+            return _not_offered(
+                campus,
+                "No wellness rooms listed",
+                f"No wellness rooms are listed in {school}'s LibCal",
+            )
         groups: dict[tuple[int, int], list[dict[str, Any]]] = {}
         for room in rooms:
             groups.setdefault((room["lid"], room["gid"]), []).append(room)
@@ -310,19 +354,19 @@ async def find_rooms(
                     )
                 )
     except ProviderError:
+        if wellness:
+            return _not_offered(
+                campus, "Live times unavailable right now", "Live room times unavailable"
+            )
         return [_page_offer(campus, "Live times unavailable right now")]
     if not offers:
         reason = (
-            f"No room for {group} at {campus.get('school_name')} is open for "
+            f"No wellness room at {school} is open for {duration} minutes in that window"
+            if wellness
+            else f"No room for {group} at {campus.get('school_name')} is open for "
             f"{duration} minutes in that window"
         )
-        return [
-            {
-                **_page_offer(campus, "No open room in that window"),
-                "available": False,
-                "unavailable_reason": reason,
-            }
-        ]
+        return _not_offered(campus, "No open room in that window", reason)
     offers.sort(key=lambda item: (item[0], item[1]))
     return [offer for _, _, offer in offers[:MAX_OFFERS]]
 
@@ -390,5 +434,11 @@ async def campus_rooms_handler(payload: dict[str, Any], http: Http) -> dict[str,
     window_start, window_end = brief.get("window_start"), brief.get("window_end")
     if not window_start or not window_end:
         raise ValueError("Missing the time window for rooms")
-    offers = await find_rooms(http, campus, str(window_start), str(window_end))
+    offers = await find_rooms(
+        http,
+        campus,
+        str(window_start),
+        str(window_end),
+        wellness=brief.get("service") == "wellness",
+    )
     return {**payload, "offers": offers}

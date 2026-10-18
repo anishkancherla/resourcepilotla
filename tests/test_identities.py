@@ -105,9 +105,10 @@ def test_no_seller_or_wallet_identity_remains() -> None:
 
 
 def test_service_chains_use_real_specialists() -> None:
-    assert SERVICES == ("rooms", "housing")
+    assert SERVICES == ("rooms", "wellness", "housing")
     assert SERVICE_CHAINS == {
         "rooms": ("intake", "researcher", "campus_rooms", "verification", "planner"),
+        "wellness": ("intake", "researcher", "campus_rooms", "verification", "planner"),
         "housing": ("intake", "researcher", "verification"),
     }
     assert SPECIALISTS == {"intake", "researcher", "campus_rooms", "verification", "planner"}
@@ -310,3 +311,14 @@ def test_packaging_no_longer_ships_sellers_or_payment_dependencies() -> None:
     assert '"7 agents are starting.' in makefile
     for target in ("setup", "bootstrap", "bootstrap-missing", "start", "verify", "check"):
         assert re.search(rf"^{target}:", makefile, flags=re.MULTILINE), target
+
+
+def test_wellness_without_a_room_system_skips_campus_rooms_and_the_planner() -> None:
+    found = {"rooms": {"status": "found"}}
+    assert service_chain("wellness", found) == SERVICE_CHAINS["wellness"]
+    assert service_chain("wellness", {"rooms": {"status": "needs_link"}}) == (
+        "intake",
+        "researcher",
+        "verification",
+    )
+    assert service_chain("rooms", {"rooms": {"status": "needs_link"}}) == SERVICE_CHAINS["rooms"]

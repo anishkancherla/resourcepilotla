@@ -9,16 +9,22 @@ request is stored. The Researcher then:
    room-booking links and fingerprints LibCal, EMS, 25Live, Skedda, or Robin. When nothing is
    found it asks for the booking link instead of guessing, and checks the pasted link the same way.
 3. Finds the housing office and its application portal, plus IPEDS housing facts.
+4. For wellness, finds the school's public events calendar (Localist's keyless ``/api/2/events``
+   on ``events.<domain>``, ``calendar.<domain>``, or ``<school>.localist.com``) and keeps the
+   week's health and wellness events.
 
 Every fetch is https only, limited to the school's own domain or a known booking vendor, refused
 for hosts that resolve to private addresses, re-checked on every redirect, size-capped, and
 counted against a small fetch and time budget. Page content is untrusted evidence: the
-Researcher extracts links and fingerprints from it and never follows instructions in it.
+Researcher extracts links and fingerprints from it and never follows instructions in it. From a
+structured events feed it keeps only a capped title, start time, location, and event link, which
+are shown as data and never acted on.
 """
 
 from __future__ import annotations
 
 import html as html_lib
+import json
 import re
 import time
 from dataclasses import dataclass, field
@@ -56,6 +62,19 @@ VENDORS: dict[str, str] = {
     "robinpowered.com": "robin",
 }
 HOUSING_VENDORS = ("starrezhousing.com", "starrez.com")
+EVENT_VENDORS = ("localist.com",)
+EVENT_HOSTS = ("events.{d}", "calendar.{d}")
+LOCALIST_EVENTS = "/api/2/events"
+EVENT_DAYS = 7
+EVENT_PAGE_SIZE = 50
+MAX_EVENTS = 8
+EVENTS_TTL = 30 * 60
+WELLNESS_EVENTS = re.compile(
+    r"\b(?:health|wellness|well-?being|counsel\w*|mindful\w*|meditat\w*|yoga|flu|vaccin\w*|"
+    r"immuni[sz]\w*|clinic|sti|hiv|stress|sleep|nutrition|fitness|mental)\b",
+    re.I,
+)
+CONTROL_RE = re.compile(r"[\x00-\x1f\x7f]")
 SYSTEM_LABELS = {
     "libcal": "LibCal",
     "ems": "EMS",
@@ -710,6 +729,195 @@ async def recheck_link(http: Http, url: str, domain: str) -> bool:
 
 
 # ---------------------------------------------------------------------------
+# Wellness events
+# ---------------------------------------------------------------------------
+
+
+def _plain(value: Any, limit: int) -> str:
+    """Display text from a feed field: no tags, no control characters, one line, capped."""
+    text = TAG_RE.sub(" ", html_lib.unescape(str(value or "")))
+    return re.sub(r"\s+", " ", CONTROL_RE.sub(" ", text)).strip()[:limit]
+
+
+async def _localist(
+    http: Http, url: str, domain: str, budget: Budget
+) -> tuple[dict[str, Any], str] | None:
+    """A Localist events response and the host that served it, or None."""
+    page = await safe_page(http, url, domain, budget, EVENT_VENDORS)
+    if page is None:
+        return None
+    try:
+        data = json.loads(page.text)
+    except ValueError:
+        return None
+    if not isinstance(data, dict) or not isinstance(data.get("events"), list):
+        return None
+    return data, str(urlsplit(page.url).hostname)
+
+
+async def find_events_feed(http: Http, domain: str, *, budget: Budget | None = None) -> dict:
+    """The school's public Localist calendar, or ``not_found``. Never guessed, never asked for."""
+    cache_key = f"research:events:{domain}:v1"
+    if http.cache is not None:
+        cached = await http.cache.cache_get(cache_key)
+        if isinstance(cached, dict) and cached.get("status"):
+            return cached
+    budget = budget or Budget(fetches=6)
+    result: dict[str, Any] = {
+        "status": "not_found",
+        "feed_host": "",
+        "evidence": f"No public events calendar found on {domain}",
+    }
+    for pattern in EVENT_HOSTS:
+        found = await _localist(
+            http, f"https://{pattern.format(d=domain)}{LOCALIST_EVENTS}?pp=1", domain, budget
+        )
+        if found:
+            result = {
+                "status": "found",
+                "feed_host": found[1],
+                "evidence": f"Public Localist events feed on {found[1]}",
+            }
+            break
+    if result["status"] != "found":
+        host = f"{domain.split('.')[0]}.localist.com"
+        home = await safe_page(http, f"https://{host}/", domain, budget, EVENT_VENDORS)
+        # A <slug>.localist.com calendar that never links back to this school is someone else's.
+        if home is not None and domain in home.text.lower():
+            found = await _localist(http, f"https://{host}{LOCALIST_EVENTS}?pp=1", domain, budget)
+            if found:
+                result = {
+                    "status": "found",
+                    "feed_host": found[1],
+                    "evidence": f"{host} is a Localist calendar that links to {domain}",
+                }
+    if http.cache is not None:
+        await http.cache.cache_put(cache_key, result, WEEK if result["status"] == "found" else DAY)
+    return result
+
+
+def _filter_names(filters: Any) -> list[str]:
+    names: list[str] = []
+    if isinstance(filters, dict):
+        for items in filters.values():
+            if isinstance(items, list):
+                names.extend(
+                    str(item.get("name") or "") for item in items if isinstance(item, dict)
+                )
+    return names
+
+
+def wellness_event(raw: Any, domain: str, zone: ZoneInfo, first_day: date) -> dict[str, str] | None:
+    """One health or wellness event from a Localist feed item, or None."""
+    event = raw.get("event") if isinstance(raw, dict) else None
+    if not isinstance(event, dict):
+        return None
+    title = _plain(event.get("title"), 80)
+    url = str(event.get("localist_url") or "")
+    if not title or not safe_url(url, domain, EVENT_VENDORS):
+        return None
+    labels = [title, *map(str, event.get("keywords") or []), *map(str, event.get("tags") or [])]
+    labels += _filter_names(event.get("filters"))
+    if not WELLNESS_EVENTS.search(" ".join(labels)):
+        return None
+    starts: list[tuple[datetime, bool]] = []
+    for item in event.get("event_instances") or []:
+        instance = item.get("event_instance") if isinstance(item, dict) else None
+        if not isinstance(instance, dict):
+            continue
+        try:
+            start = datetime.fromisoformat(str(instance.get("start"))).astimezone(zone)
+        except ValueError:
+            continue
+        if start.date() >= first_day:
+            starts.append((start, bool(instance.get("all_day"))))
+    if not starts:
+        return None
+    start, all_day = min(starts)
+    when = f"{start:%a %b} {start.day}"
+    if not all_day:
+        when += f" \u00b7 {start:%-I:%M %p}".replace(":00", "")
+    return {
+        "event_id": _plain(event.get("id"), 20),
+        "title": title,
+        "starts_at": start.isoformat(),
+        "when": when,
+        "location": _plain(event.get("location_name"), 60),
+        "url": url,
+    }
+
+
+async def wellness_events(
+    http: Http,
+    feed_host: str,
+    domain: str,
+    day: str,
+    timezone: str,
+    *,
+    budget: Budget | None = None,
+) -> list[dict[str, str]]:
+    """The week's health and wellness events, soonest first. Raises ProviderError on failure."""
+    url = f"https://{feed_host}{LOCALIST_EVENTS}?start={day}&days={EVENT_DAYS}&pp={EVENT_PAGE_SIZE}"
+    found = await _localist(http, url, domain, budget or Budget(fetches=MAX_REDIRECTS + 1))
+    if found is None:
+        raise ProviderError("The events calendar did not answer")
+    zone = ZoneInfo(timezone)
+    first_day = date.fromisoformat(day)
+    events = [
+        event
+        for raw in found[0]["events"]
+        if (event := wellness_event(raw, domain, zone, first_day)) is not None
+    ]
+    unique = {event["url"]: event for event in sorted(events, key=lambda e: e["starts_at"])}
+    return list(unique.values())[:MAX_EVENTS]
+
+
+async def wellness_research(http: Http, school: dict[str, str], day: str) -> dict[str, Any]:
+    """Events for the wellness card. A miss or an outage is reported, never a failure."""
+    feed = await find_events_feed(http, school["domain"])
+    out: dict[str, Any] = {**feed, "day": day, "events": []}
+    if feed["status"] != "found":
+        return out
+    cache_key = f"research:events-list:{feed['feed_host']}:{day}:v1"
+    if http.cache is not None:
+        cached = await http.cache.cache_get(cache_key)
+        if isinstance(cached, list):
+            return {**out, "events": cached}
+    try:
+        events = await wellness_events(
+            http, feed["feed_host"], school["domain"], day, school["timezone"]
+        )
+    except ProviderError as exc:
+        return {**out, "status": "unavailable", "evidence": str(exc)}
+    if http.cache is not None:
+        await http.cache.cache_put(cache_key, events, EVENTS_TTL)
+    return {**out, "events": events}
+
+
+async def recheck_events(
+    http: Http, wellness: dict[str, Any], school: dict[str, str]
+) -> dict[str, Any]:
+    """Verification's independent re-fetch of the feed: keep only events it still lists."""
+    events = list(wellness.get("events") or [])
+    if not events or not wellness.get("feed_host"):
+        return {**wellness, "unverified": []}
+    try:
+        live = await wellness_events(
+            http,
+            str(wellness["feed_host"]),
+            school["domain"],
+            str(wellness["day"]),
+            school["timezone"],
+        )
+    except ProviderError:
+        live = []
+    still = {event["url"] for event in live}
+    kept = [event for event in events if event.get("url") in still]
+    dropped = [str(event.get("title", "")) for event in events if event.get("url") not in still]
+    return {**wellness, "events": kept, "unverified": dropped}
+
+
+# ---------------------------------------------------------------------------
 # Windows and the handler
 # ---------------------------------------------------------------------------
 
@@ -763,6 +971,23 @@ async def research(payload: dict[str, Any], http: Http, *, now: datetime) -> dic
             raise ValueError(
                 f"No housing facts or housing office found for {school['school_name']}"
             )
+        return out
+
+    if service == "wellness":
+        # Rooms are optional here: a school without a public room system still gets events and
+        # the crisis line, so a miss never pauses to ask for a link.
+        rooms = await find_room_system(http, school["domain"])
+        out["rooms"] = rooms
+        start, end = room_window(
+            str(brief["day"]), str(brief["window"]), school["timezone"], now=now
+        )
+        if start >= end:
+            raise ValueError(f"That time has already passed at {school['school_name']}")
+        brief.update(window_start=start, window_end=end, timezone=school["timezone"])
+        out["brief"] = brief
+        if rooms["status"] == "found":
+            out["campus"] = campus_context(school, rooms, brief)
+        out["wellness"] = await wellness_research(http, school, str(brief["day"]))
         return out
 
     if brief.get("booking_link"):

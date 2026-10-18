@@ -1,7 +1,8 @@
-"""Room planning: one option per open study room, earliest opening first, then the snuggest fit.
+"""Room planning: one option per open room, earliest opening first, then the snuggest fit.
 
 When a re-check finds a room taken, the Planner runs again with that room's ``item_id`` excluded,
-so the student gets the next best rooms instead of an error.
+so the student gets the next best rooms instead of an error. A wellness search with no room left
+gets no options rather than an error: its card still shows events and the crisis line.
 """
 
 from __future__ import annotations
@@ -40,6 +41,8 @@ def plan_room_options(
         and offer.get("available", True)
         and str(offer["item_id"]) not in excluded
     ]
+    if not usable and brief.get("service") == "wellness":
+        return []
     if not usable:
         raise ValueError(NO_ROOM)
 

@@ -5,7 +5,8 @@
     uv run python scripts/print_cards.py purdue.edu      # plus live Researcher and Campus Rooms
 
 With school domains it runs the real Campus Researcher logic and the Campus Rooms search against
-public pages (IPEDS, the school's site, LibCal). It needs no keys and never books anything.
+public pages (IPEDS, the school's site, LibCal, the school's Localist events feed). It needs no
+keys and never books anything.
 """
 
 from __future__ import annotations
@@ -84,8 +85,9 @@ def show(title: str, card: tuple[str, dict[str, Any]], *, terminal: bool = False
 
 def samples() -> None:
     show("Campus services menu", cards.welcome_card())
-    for service in ("rooms", "housing"):
+    for service in ("rooms", "wellness", "housing"):
         show(f"{service} form", cards.service_form(service))
+    show("Wellness card, nothing found", cards.wellness_card("demo", {}))
     show("Paste-link fallback", cards.room_link_card("demo", "Example University"))
     chain = ("intake", "researcher", "campus_rooms", "verification", "planner")
     show("Progress", cards.progress_card("demo", "campus_rooms", chain))
@@ -119,6 +121,29 @@ async def live_rooms(domain: str, found: dict[str, Any], rooms_http: Http) -> No
     show(f"Booking link at {domain}", cards.room_link_receipt(options[0]), terminal=True)
 
 
+async def live_wellness(domain: str, http: Http, rooms_http: Http) -> None:
+    """The wellness card with live rooms and events. Verification's re-checks are not run here."""
+    from resourcepilot.planning import plan_room_options
+    from resourcepilot.rooms import find_rooms
+    from resourcepilot.vetting import verification_handler
+
+    day = (utc_now() + timedelta(days=1)).date().isoformat()
+    fields = {"school_domain": domain, "day": day, "window": "afternoon", "duration": "30"}
+    found = await research({"brief": room_brief(fields, service="wellness")}, http, now=utc_now())
+    if found.get("campus"):
+        brief = found["brief"]
+        offers = await find_rooms(
+            rooms_http,
+            found["campus"],
+            brief["window_start"],
+            brief["window_end"],
+            wellness=True,
+        )
+        found = verification_handler({**found, "offers": offers}, {})
+        found["options"] = plan_room_options(brief, found["offers"])
+    show(f"Wellness at {domain}", cards.wellness_card("demo", found))
+
+
 async def live(domain: str, http: Http, rooms_http: Http) -> None:
     try:
         housing = await research(
@@ -131,10 +156,14 @@ async def live(domain: str, http: Http, rooms_http: Http) -> None:
         if found.get("needs_link"):
             school = found["school"]["school_name"]
             show(f"Room link needed at {domain}", cards.room_link_card("demo", school))
-            return
-        await live_rooms(domain, found, rooms_http)
+        else:
+            await live_rooms(domain, found, rooms_http)
     except (ProviderError, ValueError) as exc:
         print(f"\n=== {domain}: {exc}")
+    try:
+        await live_wellness(domain, http, rooms_http)
+    except (ProviderError, ValueError) as exc:
+        print(f"\n=== {domain} wellness: {exc}")
 
 
 async def main(domains: list[str]) -> None:

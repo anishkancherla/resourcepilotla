@@ -116,3 +116,15 @@ def test_handler_raises_the_first_reason_when_nothing_is_left() -> None:
         verification_handler(payload, {})
     with pytest.raises(ValueError, match="No open room is left at your school for that time"):
         verification_handler({"brief": BRIEF, "campus": CAMPUS, "offers": []}, {})
+
+
+def test_wellness_keeps_the_reason_instead_of_failing() -> None:
+    brief = {**BRIEF, "service": "wellness", "group_size": 1}
+    reason = "No wellness rooms are listed in Purdue's LibCal"
+    unavailable = page(available=False, unavailable_reason=reason)
+    result = verification_handler({"brief": brief, "campus": CAMPUS, "offers": [unavailable]}, {})
+    assert (result["offers"], result["room_note"]) == ([], reason)
+    empty = verification_handler({"brief": brief, "school": {"domain": "mit.edu"}}, {})
+    assert (empty["offers"], empty["room_note"]) == ([], "")
+    kept = verification_handler({"brief": brief, "campus": CAMPUS, "offers": [room()]}, {})
+    assert (kept["offers"], kept["room_note"]) == ([room()], "")

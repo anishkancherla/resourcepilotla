@@ -14,9 +14,10 @@ Before recording:
 
 ## 1. The services menu (15 s)
 
-Say "hi". The Orchestrator answers with the campus services menu: **Study rooms**, **Campus
-housing**, and **My bookings**. Type a sentence instead, and it answers with the same menu: every
-request starts from a button and a short form.
+Say "hi". The Orchestrator answers with the campus services menu: **Study rooms**, **Health &
+wellness**, **Campus housing**, and **My bookings**. The 988 crisis line is at the bottom. Type a
+sentence instead, and it answers with the same menu: every request starts from a button and a
+short form.
 
 ## 2. A real study room at any school (55 s)
 
@@ -55,6 +56,11 @@ Paste the library's
 booking link and press **Check this link**. The Researcher checks the pasted link with the same
 rules as one it found itself. Optional: paste a link on another domain first, and the same card
 comes back with the reason.
+
+Optional (30 s): press **Menu**, then **Open health & wellness** with a Purdue email. The card
+starts with 988 and 911, then shows open wellness rooms from Purdue's LibCal and the week's health
+events from `events.purdue.edu`, each with its RSVP link. Say: "It never asks about your health.
+The crisis line is static, so it shows even when a school has nothing to find."
 
 ## 5. Campus housing (25 s)
 

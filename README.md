@@ -7,6 +7,7 @@ short forms, with a card for every reply.
 | Service | What you get | Source |
 | --- | --- | --- |
 | **Study rooms** | Real open library study rooms at your school, re-checked live, then a free booking link. You book with your own sign-in. | Live: your school's LibCal, found by the Campus Researcher |
+| **Health & wellness** | Open meditation, reflection, and sensory rooms at your school, the week's health and wellness events with RSVP links, and the 988 crisis line on every card | Live: your school's LibCal and its public Localist events calendar |
 | **Campus housing** | Dorm beds, typical room and board, meal plans, your housing office, and its application portal, with each link re-checked | Live: IPEDS plus the school's own housing site |
 | **My bookings** | Your recent re-checked rooms and their booking links | ResourcePilot's workflow records |
 
@@ -68,9 +69,9 @@ See [docs/agentverse-deployment.md](docs/agentverse-deployment.md).
 | --- | --- | --- | --- | --- |
 | `orchestrator` | ResourcePilot Orchestrator | Runs the ASI:One chat, the services menu, cards, and the workflow | Chat, Tasks | 8000 |
 | `intake` | ResourcePilot Intake | Turns a submitted form into a validated brief, keeping only the school domain | Chat, Tasks | 8001 |
-| `researcher` | ResourcePilot Campus Researcher | Finds a school's room-booking system and housing pages from its email domain | Chat, Tasks | 8002 |
-| `campus_rooms` | ResourcePilot Campus Rooms | Reads open library rooms live and re-checks one before handing over the booking link | Chat, Tasks | 8003 |
-| `verification` | ResourcePilot Verification | Checks every room offer and re-opens official housing links before you see them | Chat, Tasks | 8004 |
+| `researcher` | ResourcePilot Campus Researcher | Finds a school's room system, housing pages, and events feed from its email domain | Chat, Tasks | 8002 |
+| `campus_rooms` | ResourcePilot Campus Rooms | Reads open study and wellness rooms live and re-checks one before handing over its link | Chat, Tasks | 8003 |
+| `verification` | ResourcePilot Verification | Checks every room offer and re-opens housing links and event feeds before you see them | Chat, Tasks | 8004 |
 | `planner` | ResourcePilot Planner | Ranks open rooms and reroutes when a room is taken | Chat, Tasks | 8005 |
 | `memory_audit` | ResourcePilot Memory and Audit | Keeps the append-only audit timeline and your recent bookings | Chat, Tasks | 8006 |
 
@@ -93,6 +94,12 @@ Study rooms   Intake ─▶ Campus Researcher ─▶ Campus Rooms (live LibCal) 
                  taken      ─▶ Planner again, without that room ─▶ rooms carousel
               No booking system found ─▶ paste-link card ─▶ Campus Researcher checks the link
 
+Wellness      Intake ─▶ Campus Researcher (room system + events feed) ─▶ Campus Rooms
+              (wellness rooms) ─▶ Verification (re-fetches the feed) ─▶ Planner
+              ─▶ wellness card: 988 first, open rooms, this week's events
+              "View room" ─▶ the same live re-check and booking link as study rooms
+              No room system: Intake ─▶ Campus Researcher ─▶ Verification ─▶ wellness card
+
 Housing       Intake ─▶ Campus Researcher ─▶ Verification (re-opens each link) ─▶ housing card
 
 My bookings   Orchestrator ─▶ your recent re-checked rooms
@@ -113,12 +120,14 @@ recorded, unless all of these hold:
 4. When the room's seat count is known, it fits your group.
 
 For housing, Verification re-opens the housing office and application portal links itself and
-drops any that no longer open on the school's site.
+drops any that no longer open on the school's site. For wellness, it re-fetches the school's
+events feed itself and drops any event the feed no longer lists.
 
 The Campus Researcher reads only public pages over https, on your school's domain or a known
-booking or housing vendor. It checks that every address it connects to is public, vets every
-redirect, and stops after a small fetch and time budget. Page text is treated as evidence, never
-as instructions. Campus Rooms reads only a LibCal host on the school's own domain or `libcal.com`.
+booking, housing, or events vendor (Localist). It checks that every address it connects to is
+public, vets every redirect, and stops after a small fetch and time budget. Page text is treated
+as evidence, never as instructions. From an events feed it keeps only a capped title, time,
+location, and link. Campus Rooms reads only a LibCal host on the school's own domain or `libcal.com`.
 See [docs/trust-model.md](docs/trust-model.md).
 
 ## Useful commands
@@ -135,11 +144,12 @@ make stop
 
 `uv run python scripts/print_cards.py` prints every card payload, validated exactly as the agents
 send it. Pass a school domain, such as `purdue.edu`, to also run the real Researcher and Campus
-Rooms logic against public pages. It needs no keys and never books anything.
+Rooms logic against public pages, including the wellness card's rooms and events. It needs no keys
+and never books anything.
 
 The test suite drives the real agent handlers in process: every role is loaded as its own module
-with its own address. Every live source (IPEDS, LibCal, and school websites) is served by offline
-fakes, so no test touches the network. Set `TEST_DATABASE_URL` to also run the store contract and
+with its own address. Every live source (IPEDS, LibCal, Localist, and school websites) is served by
+offline fakes, so no test touches the network. Set `TEST_DATABASE_URL` to also run the store contract and
 the end-to-end network tests on real Postgres. CI does this.
 
 ## Documentation
@@ -158,8 +168,16 @@ the end-to-end network tests on real Postgres. CI does this.
 ## What this does not claim
 
 ResourcePilot takes no payments of any kind: there is no payment rail, no Stripe integration, no
-FET, and no escrow. It does not reserve study rooms, and it does not apply for, reserve, or pay for
-housing. It links you to your school's own site, where you sign in yourself.
+FET, and no escrow. It does not reserve study or wellness rooms, RSVP to events, or apply for,
+reserve, or pay for housing. It links you to your school's own site, where you sign in yourself.
+It never asks about your health, books health or counseling appointments, or gives health advice.
+The 988 line on the wellness card is static text, not a referral service.
+
+Wellness rooms are found only when a school lists them in LibCal under names such as meditation,
+reflection, prayer, lactation, or sensory, so many schools will show none. Wellness events come
+only from a public Localist calendar on `events.<domain>`, `calendar.<domain>`, or
+`<school>.localist.com`. Other calendars are not read, and the keyword filter can include events a
+school tags as wellness, such as a farmers market.
 
 Campus Rooms reads open times from the endpoint that LibCal's public booking page calls. That
 endpoint is not a documented API and may change. When it fails, you get the school's booking link,

@@ -143,9 +143,11 @@ async def accept_result(
     chain = service_chain(service, result.payload)
     index = chain.index(result.source_role)
     if index == len(chain) - 1:
+        # A chain that ends at Verification (housing, wellness without rooms) is an answer; one
+        # that ends at the Planner has options to pick from.
         done = (
             {"status": "answered", "stage": "complete"}
-            if service == "housing"
+            if chain[-1] == "verification"
             else {"status": "awaiting_selection", "stage": "selection"}
         )
         return None, await store.patch_workflow(

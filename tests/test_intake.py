@@ -25,8 +25,8 @@ NOW = datetime(2026, 10, 21, 10, 0, tzinfo=CAMPUS_TZ)
 ROOM = {"school_domain": "purdue.edu", "day": "2026-10-22", "window": "afternoon"}
 
 
-def test_only_rooms_and_housing_are_offered() -> None:
-    assert SERVICES == ("rooms", "housing")
+def test_only_rooms_wellness_and_housing_are_offered() -> None:
+    assert SERVICES == ("rooms", "wellness", "housing")
     for removed in ("bundle_brief", "build_brief", "from_form", "SAVED_PREFERENCES", "ANCHORS"):
         assert not hasattr(intake, removed), removed
 
@@ -148,3 +148,22 @@ def test_upcoming_days_are_local_select_options() -> None:
         ("2026-10-23", "Fri Oct 23"),
     ]
     assert len(upcoming_days(NOW)) == 7
+
+
+def test_wellness_brief_is_for_one_person_and_asks_nothing_about_health() -> None:
+    brief = intake_handler(
+        {"service": "wellness", "fields": {**ROOM, "group_size": "6"}, "now": NOW.isoformat()}
+    )["brief"]
+    assert brief == {
+        "service": "wellness",
+        "school_domain": "purdue.edu",
+        "day": "2026-10-22",
+        "window": "afternoon",
+        "duration_minutes": 30,
+        "hours": 0.5,
+        "group_size": 1,
+    }
+    with pytest.raises(ValueError, match="duration"):
+        room_brief({**ROOM, "duration": "120"}, now=NOW, service="wellness")
+    with pytest.raises(ValueError, match="wellness rooms and events"):
+        room_brief({**ROOM, "school_domain": ""}, now=NOW, service="wellness")

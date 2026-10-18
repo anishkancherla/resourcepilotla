@@ -3,6 +3,11 @@
 Reads real open library study rooms at the student's own school, at any school whose room system
 the Campus Researcher found. It is the only ResourcePilot agent that reads room availability.
 
+For a health and wellness search it reads only wellness rooms: LibCal spaces named for
+meditation, reflection, prayer, wellness, lactation, rest, or sensory needs. They are never
+offered as study rooms. When a school lists none, has no LibCal, or has none open, it says so
+instead of offering a link. It never asks why the student wants the room.
+
 It answers two kinds of tasks from the Orchestrator:
 
 - **Find rooms.** For LibCal schools it reads the public room list and the open slots from the

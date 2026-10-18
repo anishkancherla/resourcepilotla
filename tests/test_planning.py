@@ -111,3 +111,9 @@ def test_planner_handler_carries_the_payload_and_exclusions() -> None:
     fresh = planner_handler({"brief": BRIEF, "offers": OFFERS}, {})
     assert fresh["exclude_items"] == []
     assert ids(fresh["options"])[0] == "early"
+
+
+def test_wellness_with_nothing_usable_has_no_options_instead_of_an_error() -> None:
+    wellness = {**BRIEF, "service": "wellness", "group_size": 1}
+    assert plan_room_options(wellness, []) == []
+    assert plan_room_options(wellness, [offer("only", "12:00")], {"only"}) == []

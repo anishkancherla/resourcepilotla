@@ -1,4 +1,4 @@
-"""Turn a submitted form into a validated brief for one campus service: study rooms or housing.
+"""Turn a submitted form into a validated brief for one campus service: rooms, wellness, housing.
 
 ResourcePilot takes requests only from cards and forms, never free text. Every brief is bounded
 and deterministic, and a missing or invalid field raises a ``ValueError`` the Orchestrator shows
@@ -15,8 +15,9 @@ from zoneinfo import ZoneInfo
 from resourcepilot.clock import CAMPUS_TZ, parse, utc_now
 from resourcepilot.research import DEFAULT_TIMEZONE, WINDOWS, school_domain
 
-SERVICES = ("rooms", "housing")
+SERVICES = ("rooms", "wellness", "housing")
 ROOM_DURATIONS = {"30": "30 minutes", "60": "1 hour", "90": "90 minutes", "120": "2 hours"}
+WELLNESS_DURATIONS = {key: ROOM_DURATIONS[key] for key in ("30", "60", "90")}
 MAX_GROUP = 12
 MAX_DAYS_AHEAD = 14
 EMAIL_FIELDS = ("email", "school_email")
@@ -55,10 +56,22 @@ def _require_domain(fields: dict[str, Any], purpose: str) -> str:
     return school_domain(domain)
 
 
-def room_brief(fields: dict[str, Any], *, now: datetime | None = None) -> dict[str, Any]:
-    """A study-room search at the student's own school. The Researcher sets the exact window."""
+def room_brief(
+    fields: dict[str, Any], *, now: datetime | None = None, service: str = "rooms"
+) -> dict[str, Any]:
+    """A study- or wellness-room search at the student's own school.
+
+    The Researcher sets the exact window. A wellness search is for one person and never asks
+    why: no health details are collected.
+    """
     current = now or utc_now()
-    domain = _require_domain(fields, "so the Researcher can find your library")
+    wellness = service == "wellness"
+    domain = _require_domain(
+        fields,
+        "so the Researcher can find your school's wellness rooms and events"
+        if wellness
+        else "so the Researcher can find your library",
+    )
     try:
         day = date.fromisoformat(str(fields.get("day", "")))
     except ValueError:
@@ -67,14 +80,15 @@ def room_brief(fields: dict[str, Any], *, now: datetime | None = None) -> dict[s
     if not today - timedelta(days=1) <= day <= today + timedelta(days=MAX_DAYS_AHEAD - 1):
         raise ValueError(f"Pick a day within the next {MAX_DAYS_AHEAD} days")
     window = str(fields.get("window") or "afternoon")
-    duration = str(fields.get("duration") or "60")
-    if window not in WINDOWS or duration not in ROOM_DURATIONS:
+    duration = str(fields.get("duration") or ("30" if wellness else "60"))
+    durations = WELLNESS_DURATIONS if wellness else ROOM_DURATIONS
+    if window not in WINDOWS or duration not in durations:
         raise ValueError("Missing: a time of day and a duration")
-    group = _int(fields.get("group_size") or 1)
+    group = 1 if wellness else _int(fields.get("group_size") or 1)
     if group is None or not 1 <= group <= MAX_GROUP:
         raise ValueError(f"People must be between 1 and {MAX_GROUP}")
     return {
-        "service": "rooms",
+        "service": service,
         "school_domain": domain,
         "day": day.isoformat(),
         "window": window,
@@ -95,8 +109,8 @@ def intake_handler(payload: dict[str, Any]) -> dict[str, Any]:
     now = parse(str(payload["now"])) if payload.get("now") else None
     fields = dict(payload.get("fields") or {})
     service = str(payload.get("service") or fields.get("service") or "")
-    if service == "rooms":
-        return {"brief": room_brief(fields, now=now)}
+    if service in ("rooms", "wellness"):
+        return {"brief": room_brief(fields, now=now, service=service)}
     if service == "housing":
         return {"brief": housing_brief(fields)}
     raise ValueError(f"Unknown service: {service or 'none'}")

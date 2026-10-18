@@ -66,7 +66,7 @@ async def test_every_reply_is_a_card_and_free_text_gets_the_menu(network) -> Non
     assert menu_again["root"]["title"] == "ResourcePilot campus services"
     assert "buttons and forms" in narration
     assert network.store.workflows == {}  # a sentence never starts a request
-    for service in ("rooms", "housing"):
+    for service in ("rooms", "wellness", "housing"):
         await network.send_user(chat({"action": "open_service", "service": service}))
         assert last_card(network, "form")[1]["submit_cta"]["selection"]["service"] == service
     await network.send_user(chat({"action": "open_service", "service": "bundle"}))
@@ -168,6 +168,90 @@ async def test_unknown_room_system_asks_for_the_link_then_checks_it(network) -> 
     )
     _, carousel, _ = last_card(network, "carousel")
     assert carousel["items"][0]["badges"][-1]["label"] == "Link only"
+
+
+def wellness_form(domain: str = "purdue.edu") -> dict:
+    return {**rooms_form(domain, duration="30"), "service": "wellness", "group_size": "1"}
+
+
+def wellness_view_buttons(card: dict) -> list[dict]:
+    found = []
+
+    def walk(node):
+        if isinstance(node, dict):
+            if node.get("type") == "button" and node["label"] == "View room":
+                found.append(node["action"]["selection"])
+            for child in node.get("children", []):
+                walk(child)
+
+    walk(card["root"])
+    return found
+
+
+async def test_wellness_flow_shows_crisis_rooms_and_events_then_a_link(network) -> None:
+    await network.send_user(chat(wellness_form()))
+    _, card, narration = last_card(network, "custom")
+    assert card["root"]["title"] == "Health & wellness at Purdue University-Main Campus"
+    assert "988" in narration
+    encoded = json.dumps(card, ensure_ascii=False)
+    assert encoded.index("988") < encoded.index("Wellness rooms open")
+    assert "Free Flu Shot Clinic" in encoded and "Football" not in encoded
+    assert "evil.example.com" not in encoded
+    assert completed_roles(network) == [
+        "intake",
+        "researcher",
+        "campus_rooms",
+        "verification",
+        "planner",
+    ]
+    (view,) = wellness_view_buttons(card)
+    await network.send_user(chat(view))
+    _, detail, _ = last_card(network, "detail")
+    assert detail["title"] == "Meditation Room"
+    assert "988" in json.dumps(detail)
+    await network.send_user(chat(recheck_cta(detail)["selection"]))
+    _, receipt, _ = last_card(network, "detail")
+    assert receipt["title"] == "Your booking link"
+    assert "https://calendar.lib.purdue.edu/space/104" in json.dumps(receipt)
+    state = next(iter(network.store.workflows.values()))
+    assert state["status"] == "booked"
+    stored = dumps([network.store.workflows, network.store.events, network.store.cache])
+    assert EMAIL_USER not in stored
+
+
+async def test_wellness_room_taken_during_recheck_returns_to_the_wellness_card(network) -> None:
+    await network.send_user(chat(wellness_form()))
+    (view,) = wellness_view_buttons(last_card(network, "custom")[1])
+    await network.send_user(chat(view))
+    _, detail, _ = last_card(network, "detail")
+    network.use_http(booked={"104@12:00"})
+    await network.send_user(chat(recheck_cta(detail)["selection"]))
+    assert any("just booked" in text for text in network.texts())
+    _, card, _ = last_card(network)
+    assert card["root"]["title"].startswith("Health & wellness at")
+    state = next(iter(network.store.workflows.values()))
+    assert state["status"] == "awaiting_selection"
+
+
+async def test_wellness_without_rooms_or_events_still_answers_with_the_crisis_line(
+    network,
+) -> None:
+    await network.send_user(chat(wellness_form("mit.edu")))
+    _, card, _ = last_card(network, "custom")
+    encoded = json.dumps(card, ensure_ascii=False)
+    assert "988" in encoded
+    assert "No public room-booking system found" in encoded
+    assert "No public events calendar found" in encoded
+    assert completed_roles(network) == ["intake", "researcher", "verification"]
+    assert next(iter(network.store.workflows.values()))["status"] == "answered"
+
+
+async def test_wellness_explains_a_libcal_without_wellness_rooms(network) -> None:
+    await network.send_user(chat(wellness_form("ucla.edu")))
+    _, card, _ = last_card(network, "custom")
+    assert "No wellness rooms are listed" in json.dumps(card)
+    assert wellness_view_buttons(card) == []
+    assert next(iter(network.store.workflows.values()))["status"] == "awaiting_selection"
 
 
 async def test_housing_flow_shows_facts_and_rechecked_links(network) -> None:

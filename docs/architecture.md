@@ -8,9 +8,9 @@ messages. All seven run from `agents/run.py`, one process per agent, selected by
 | --- | --- | --- | --- |
 | `orchestrator` | ResourcePilot Orchestrator | 8000 | Chat, menu, cards, workflow state, re-check and reroute |
 | `intake` | ResourcePilot Intake | 8001 | Form fields to a validated brief; keeps only the school domain |
-| `researcher` | ResourcePilot Campus Researcher | 8002 | School, room-booking system, and housing pages from the domain |
-| `campus_rooms` | ResourcePilot Campus Rooms | 8003 | Open rooms read live from LibCal; the live re-check of one room |
-| `verification` | ResourcePilot Verification | 8004 | Checks room offers; re-opens official housing links |
+| `researcher` | ResourcePilot Campus Researcher | 8002 | School, room-booking system, housing pages, and events feed from the domain |
+| `campus_rooms` | ResourcePilot Campus Rooms | 8003 | Open study or wellness rooms read live from LibCal; the live re-check of one room |
+| `verification` | ResourcePilot Verification | 8004 | Checks room offers; re-opens official housing links; re-fetches the events feed |
 | `planner` | ResourcePilot Planner | 8005 | Ranks open rooms; replans without a taken room |
 | `memory_audit` | ResourcePilot Memory and Audit | 8006 | Append-only audit timeline |
 
@@ -33,7 +33,12 @@ a workflow for one service.
 | Service | Specialist chain | Ends with |
 | --- | --- | --- |
 | `rooms` | Intake → Campus Researcher → Campus Rooms → Verification → Planner | A rooms carousel, then the re-check and a booking link |
+| `wellness` | Intake → Campus Researcher → Campus Rooms → Verification → Planner | A wellness card: crisis line, open wellness rooms, the week's events (status `awaiting_selection`) |
+| `wellness`, no room system | Intake → Campus Researcher → Verification | The same card without rooms (status `answered`) |
 | `housing` | Intake → Campus Researcher → Verification | A housing card (status `answered`) |
+
+A chain that ends at Verification is an answer (`answered`); one that ends at the Planner has
+options to pick from (`awaiting_selection`).
 
 **My bookings** starts no chain. The Orchestrator reads your five most recent workflows whose
 status is `booked` from the shared store and shows them as one card.
@@ -65,8 +70,16 @@ For housing it reads IPEDS institutional characteristics and finds the housing o
 portal must be a link on the office's own pages, or on its housing vendor (StarRez), that reads
 like an application or portal.
 
-Results are cached per domain in `api_cache`: a week when found, a day otherwise. The fetch rules
-are in [trust-model.md](trust-model.md).
+For wellness it finds the room system the same way but never pauses for a link: rooms are
+optional on the wellness card. It also looks for the school's public Localist calendar at
+`events.<domain>/api/2/events`, then `calendar.<domain>`, then `<school>.localist.com` (accepted
+only when its home page links back to the school). It keeps up to eight events in the next seven
+days whose title, keywords, tags, or filter names read as health or wellness, with only a capped
+title, start time, location, and link. A missing or failing feed is shown on the card, never a
+failed request.
+
+Results are cached per domain in `api_cache`: a week when found, a day otherwise. A week's event
+list is cached for 30 minutes. The fetch rules are in [trust-model.md](trust-model.md).
 
 ### Campus Rooms
 
@@ -84,6 +97,11 @@ timezone, booking system, booking URL, and LibCal host) and the brief's time win
 - **Nothing fits.** It returns one unavailable offer that says so ("No room for 4 at … is open for
   60 minutes in that window"), which Verification turns into a clear error card.
 
+- **Wellness.** It reads only wellness spaces (meditation, reflection, prayer, wellness,
+  lactation, rest, or sensory), which are never offered as study rooms, for one person. With no
+  LibCal, no wellness space listed, or none open, it returns one unavailable offer with the
+  reason instead of a link.
+
 Campus Rooms reads only a LibCal host that is on the school's own domain or `libcal.com`, and only
 after checking that the host resolves to public addresses.
 
@@ -97,6 +115,12 @@ reason.
 
 For housing, Verification re-opens the office and portal links itself and drops any that do not
 open.
+
+For wellness, a search with no acceptable room is not a failure: Verification passes the first
+reason on as `room_note`, and the Planner returns no options instead of an error. Verification
+also re-fetches the events feed itself and drops events it no longer lists. Picking a wellness
+room uses the same live re-check and booking link as a study room; a room taken during the
+re-check returns to the wellness card without it.
 
 The Planner turns the accepted offers into up to six room options, earliest opening first and then
 the snuggest fit for the group. The first option is labeled **Earliest opening**. Each option has

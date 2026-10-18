@@ -214,10 +214,11 @@ def test_custom_card_depth_limit() -> None:
         cards.card_message("bad", "table", {})
 
 
-def test_services_menu_offers_two_services_and_bookings() -> None:
+def test_services_menu_offers_three_services_and_bookings() -> None:
     _, menu = cards.welcome_card()
     assert list(_selections(menu)) == [
         {"action": "open_service", "service": "rooms"},
+        {"action": "open_service", "service": "wellness"},
         {"action": "open_service", "service": "housing"},
         {"action": "show_bookings"},
     ]
@@ -226,9 +227,10 @@ def test_services_menu_offers_two_services_and_bookings() -> None:
     assert "campus housing" in text
     assert "my bookings" in text
     assert not PAYMENT_WORDS.findall(text)
+    assert cards.CRISIS_TEXT in json.dumps(menu, ensure_ascii=False)
 
 
-@pytest.mark.parametrize("service", ["rooms", "housing"])
+@pytest.mark.parametrize("service", ["rooms", "wellness", "housing"])
 def test_every_form_submits_its_own_service(service) -> None:
     _, form = cards.service_form(service)
     for field in form["fields"]:
@@ -456,7 +458,7 @@ def test_cards_module_has_no_bundle_or_payment_surface() -> None:
         "demo_control_buttons",
     )
     assert not [name for name in removed if hasattr(cards, name)]
-    assert set(cards.SERVICE_TITLES) == {"rooms", "housing"}
+    assert set(cards.SERVICE_TITLES) == {"rooms", "wellness", "housing"}
     source = (ROOT / "resourcepilot" / "cards.py").read_text()
     for module in ("pricing", "registry", "bundles", "logistics", "escrow", "payment"):
         assert f"resourcepilot.{module}" not in source
@@ -468,3 +470,34 @@ def test_every_orchestrator_reply_is_a_card() -> None:
     source = (ROOT / "agents" / "run.py").read_text()
     assert "TextContent(" not in source
     assert "ChatMessage(" not in source
+
+
+def test_wellness_card_always_carries_the_crisis_line() -> None:
+    kind, payload = cards.wellness_card("wf-1", {"school": {"school_name": "Test U"}})
+    message = cards.card_message("x", kind, payload)
+    encoded = json.dumps(payload, ensure_ascii=False)
+    assert message.content[1].metadata["card_kind"] == "custom"
+    assert cards.CRISIS_TEXT in encoded
+    assert "No public room-booking system found for Test U" in encoded
+    assert "No public events calendar found for Test U" in encoded
+    _, form = cards.wellness_form()
+    assert cards.CRISIS_TEXT in form["title"]
+    assert {field["name"] for field in form["fields"]} == {"email", "day", "window", "duration"}
+
+
+def test_wellness_card_rooms_use_stable_option_ids() -> None:
+    data = {"school": {"school_name": "Test U"}, "options": [OPTION]}
+    kind, payload = cards.wellness_card("wf-1", data)
+    cards.card_message("x", kind, payload)
+    assert {"action": "view_room", "workflow_id": "wf-1", "option_id": OPTION["option_id"]} in list(
+        _selections(payload)
+    )
+    _, detail = cards.room_detail("wf-1", OPTION, wellness=True)
+    assert {"label": "Need help now?", "value": cards.CRISIS_TEXT} in detail["summary_rows"]
+    _, receipt = cards.room_link_receipt(OPTION, service="wellness")
+    assert receipt["ctas"][0]["selection"] == {"action": "open_service", "service": "wellness"}
+
+
+def test_wellness_prose_only_opens_the_form() -> None:
+    for text in ("any wellness events?", "I need a meditation space", "flu shot near me"):
+        assert cards.parse_selection(text) == {"action": "open_service", "service": "wellness"}
