@@ -1,4 +1,4 @@
-# ResourcePilot Emergency Dispatcher
+# ResourcePilot Emergency Dispatch
 
 Runs the emergency **demo drill**. A student picks **Emergency (demo)** in the ResourcePilot
 Orchestrator's menu and fills in a short form: what kind of emergency (medical, fire or smoke,

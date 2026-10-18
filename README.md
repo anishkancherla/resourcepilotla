@@ -80,7 +80,7 @@ browser. See [docs/agentverse-deployment.md](docs/agentverse-deployment.md).
 | `verification` | ResourcePilot Verification | Checks every room offer and re-opens housing links and event feeds before you see them | Chat, Tasks | 8004 |
 | `planner` | ResourcePilot Planner | Ranks open rooms and matches campus housing to your criteria | Chat, Tasks | 8005 |
 | `memory_audit` | ResourcePilot Memory and Audit | Keeps the append-only audit timeline and your recent bookings | Chat, Tasks | 8006 |
-| `emergency` | ResourcePilot Emergency Dispatcher | Places one demo-drill call to your team's demo contact, never 911, and reports the transcript | Chat, Tasks | 8007 |
+| `emergency` | ResourcePilot Emergency Dispatch | Places one demo-drill call to your team's demo contact, never 911, and reports the transcript | Chat, Tasks | 8007 |
 
 "Chat" is the Agent Chat Protocol; "Tasks" is ResourcePilot's own `ResourcePilotTasks` protocol
 (`TaskRequest`, `TaskResult`, `AuditEvent`). Every agent publishes both manifests. Each one's

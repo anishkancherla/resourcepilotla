@@ -29,7 +29,7 @@ EXPECTED = {
     "verification": ("ResourcePilot Verification", 8004),
     "planner": ("ResourcePilot Planner", 8005),
     "memory_audit": ("ResourcePilot Memory and Audit", 8006),
-    "emergency": ("ResourcePilot Emergency Dispatcher", 8007),
+    "emergency": ("ResourcePilot Emergency Dispatch", 8007),
 }
 REMOVED_SETTINGS = (
     "_WALLET=",
@@ -81,6 +81,11 @@ def test_eight_real_agents_with_the_contract_names_and_ports() -> None:
     assert [role.key for role in ALL_AGENTS] == list(EXPECTED)
     assert all(role.responsibility for role in ALL_AGENTS)
     assert set(ROLE_BY_KEY) == set(EXPECTED)
+
+
+def test_agent_names_fit_the_mailbox_registration_limit() -> None:
+    # uagents rejects a Connect from the Agentverse Inspector when the name is over 32 characters.
+    assert all(len(role.name) <= 32 for role in ALL_AGENTS)
 
 
 def test_every_identity_has_unique_seed_address_port_and_key() -> None:

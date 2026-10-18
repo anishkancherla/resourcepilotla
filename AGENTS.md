@@ -17,7 +17,7 @@ official pages in [docs/official-links.md](docs/official-links.md) for anything 
   | `verification` | ResourcePilot Verification | 8004 | Checks every room offer and re-opens housing links and event feeds before you see them |
   | `planner` | ResourcePilot Planner | 8005 | Ranks open rooms and matches campus housing to your criteria |
   | `memory_audit` | ResourcePilot Memory and Audit | 8006 | Keeps the append-only audit timeline and your recent bookings |
-  | `emergency` | ResourcePilot Emergency Dispatcher | 8007 | Places one demo-drill call to your team's demo contact, never 911, and reports the transcript |
+  | `emergency` | ResourcePilot Emergency Dispatch | 8007 | Places one demo-drill call to your team's demo contact, never 911, and reports the transcript |
 
   Each one needs a unique seed variable keyed by its key (`<KEY>_SEED`), a deterministic address,
   its own port and process, a profile README at `agents/<key>/README.md`, a Chat Protocol

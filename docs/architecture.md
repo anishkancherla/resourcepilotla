@@ -13,7 +13,7 @@ messages. All eight run from `agents/run.py`, one process per agent, selected by
 | `verification` | ResourcePilot Verification | 8004 | Checks room offers; re-opens official housing links; re-fetches the events feed |
 | `planner` | ResourcePilot Planner | 8005 | Ranks open rooms; replans without a taken room; matches housing to criteria |
 | `memory_audit` | ResourcePilot Memory and Audit | 8006 | Append-only audit timeline |
-| `emergency` | ResourcePilot Emergency Dispatcher | 8007 | Places one demo-drill call to your team's demo contact, never 911, and reports the transcript |
+| `emergency` | ResourcePilot Emergency Dispatch | 8007 | Places one demo-drill call to your team's demo contact, never 911, and reports the transcript |
 
 ## Protocols
 

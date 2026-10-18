@@ -95,7 +95,7 @@ PLATFORM_ROLES: Final[tuple[AgentIdentity, ...]] = (
     ),
     AgentIdentity(
         "emergency",
-        "ResourcePilot Emergency Dispatcher",
+        "ResourcePilot Emergency Dispatch",
         "Places one demo-drill call to your team's demo contact, never 911, and reports the "
         "transcript",
         8007,
