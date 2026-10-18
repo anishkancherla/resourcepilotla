@@ -36,6 +36,8 @@ from resourcepilot.clock import utc_now
 from resourcepilot.http import MAX_RESPONSE_BYTES, Http, ProviderError, api_timeout
 
 STRIPE_API = "https://api.stripe.com"
+# Pinned so every account sends and reads the same shapes, whatever its default API version.
+STRIPE_VERSION = "2026-09-30.endive"
 STRIPE = "Stripe"
 TESTNET = "Fetch testnet"
 FET_NETWORK = "stable-testnet"
@@ -168,7 +170,10 @@ async def _stripe(
             method,
             STRIPE_API + path,
             data=data,
-            headers={"Authorization": f"Bearer {config.stripe_secret}"},
+            headers={
+                "Authorization": f"Bearer {config.stripe_secret}",
+                "Stripe-Version": STRIPE_VERSION,
+            },
             timeout=api_timeout(),
             follow_redirects=False,
         )
@@ -192,10 +197,9 @@ async def _stripe(
 def checkout_form(config: PaymentConfig, *, workflow_id: str, school: str) -> dict[str, str]:
     """The Checkout Session body: one line item at the configured price, bound to the workflow."""
     return {
-        "ui_mode": "embedded",
+        "ui_mode": "embedded_page",
         "mode": "payment",
         "redirect_on_completion": "never",
-        "payment_method_types[0]": "card",
         "line_items[0][quantity]": "1",
         "line_items[0][price_data][currency]": "usd",
         "line_items[0][price_data][unit_amount]": str(config.price_cents),

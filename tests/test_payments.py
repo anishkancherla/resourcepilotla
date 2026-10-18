@@ -148,7 +148,9 @@ def test_stripe_session_must_be_paid_test_mode_and_bound_to_the_workflow(changes
 
 def test_checkout_is_one_priced_line_bound_to_the_workflow() -> None:
     form = payments.checkout_form(STRIPE, workflow_id="wf-1", school="Purdue")
-    assert form["ui_mode"] == "embedded" and form["mode"] == "payment"
+    assert form["ui_mode"] == "embedded_page" and form["mode"] == "payment"
+    # Removed in Stripe 2026-09-30: payment methods come from the Dashboard settings.
+    assert not any(key.startswith("payment_method_types") for key in form)
     assert form["line_items[0][price_data][unit_amount]"] == "100"
     assert form["line_items[0][price_data][currency]"] == "usd"
     assert form["client_reference_id"] == form["metadata[workflow_id]"] == "wf-1"
@@ -165,6 +167,20 @@ async def test_stripe_errors_never_include_the_key_or_body() -> None:
         await payments.create_checkout(http, STRIPE, workflow_id="wf-1", school="Purdue")
     assert "STRIPE_SECRET_KEY" in str(error.value)
     assert SECRET not in str(error.value) and "Invalid" not in str(error.value)
+
+
+async def test_stripe_requests_pin_the_api_version() -> None:
+    seen: list[httpx.Request] = []
+
+    def answer(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        return httpx.Response(
+            200, json={"id": "cs_test_a1b2c3d4e5f6", "client_secret": "x", "livemode": False}
+        )
+
+    http = Http(httpx.AsyncClient(transport=httpx.MockTransport(answer)))
+    await payments.create_checkout(http, STRIPE, workflow_id="wf-1", school="Purdue")
+    assert seen[0].headers["Stripe-Version"] == payments.STRIPE_VERSION
 
 
 async def test_a_live_mode_checkout_from_stripe_is_refused() -> None:
