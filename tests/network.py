@@ -1,7 +1,7 @@
 """In-process agent network for end-to-end tests.
 
-Each platform role and seller is loaded as its own module instance with its own seed, address,
-and handlers, exactly as its container would load it. Messages sent with ``ctx.send`` are queued
+Each of the seven agents is loaded as its own module instance with its own seed, address, and
+handlers, exactly as its container would load it. Messages sent with ``ctx.send`` are queued
 and delivered to the destination module's real handler. A shared MemoryStore stands in for the
 shared Postgres. The clock can be advanced to exercise timeouts without sleeping.
 """
@@ -26,7 +26,7 @@ from uagents import Agent, Model
 from uagents_core.contrib.protocols.chat import ChatAcknowledgement, ChatMessage
 
 from resourcepilot import clock
-from resourcepilot.config import ALL_AGENTS, PLATFORM_ROLES, SELLER_AGENTS
+from resourcepilot.config import ALL_AGENTS, PLATFORM_ROLES
 from resourcepilot.store import DurableStore, MemoryStore
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -39,16 +39,6 @@ HANDLER_NAMES = {
     "TaskRequest": "handle_task",
     "TaskResult": "handle_task_result",
     "AuditEvent": "handle_audit",
-    "Quote": "handle_quote",
-    "QuoteRequest": "handle_quote_request",
-    "HoldRequest": "handle_hold_request",
-    "HoldConfirmed": "handle_hold_confirmed",
-    "HoldRejected": "handle_hold_rejected",
-    "CommitHold": "handle_commit",
-    "BookingConfirmed": "handle_booking_confirmed",
-    "ReleaseHold": "handle_release",
-    "CommitPayment": "handle_commit",
-    "RejectPayment": "handle_reject",
 }
 
 
@@ -56,8 +46,6 @@ def build_env() -> dict[str, str]:
     env = {
         "ENABLE_MAILBOX": "false",
         "DATABASE_URL": "",
-        "QUOTE_WINDOW_SECONDS": "5",
-        "HOLD_WINDOW_SECONDS": "5",
         "TASK_TIMEOUT_SECONDS": "30",
     }
     for identity in ALL_AGENTS:
@@ -65,8 +53,6 @@ def build_env() -> dict[str, str]:
         probe = Agent(name=f"probe-{identity.key}", seed=seed)
         env[identity.seed_env] = seed
         env[identity.address_env] = str(probe.address)
-        if identity.kind == "seller":
-            env[identity.wallet_env] = str(probe.wallet.address())
     return env
 
 
@@ -80,9 +66,6 @@ class FakeContext:
     async def send(self, destination: str, message: Model, **_: Any) -> None:
         self.network.queue.append((self.address, destination, message, self.session))
 
-    def get_agents_by_protocol(self, digest: str, limit: int = 10) -> list[str]:
-        return list(self.network.almanac.get(digest, []))[:limit]
-
 
 @dataclass
 class AgentNetwork:
@@ -90,7 +73,6 @@ class AgentNetwork:
     by_key: dict[str, ModuleType] = field(default_factory=dict)
     queue: deque[tuple[str, str, Model, str]] = field(default_factory=deque)
     inbox: list[Model] = field(default_factory=list)
-    almanac: dict[str, list[str]] = field(default_factory=dict)
     dropped: list[tuple[str, str]] = field(default_factory=list)
     offline: set[str] = field(default_factory=set)
     offset: timedelta = timedelta()
@@ -177,16 +159,13 @@ def _load(path: Path, name: str) -> ModuleType:
 
 def load_modules(env: dict[str, str]) -> dict[str, ModuleType]:
     """Import every runtime once, each under its own role, with the test identities."""
-    saved = {key: os.environ.get(key) for key in [*env, "AGENT_ROLE", "SELLER_ID"]}
+    saved = {key: os.environ.get(key) for key in [*env, "AGENT_ROLE"]}
     os.environ.update(env)
     modules: dict[str, ModuleType] = {}
     try:
         for role in PLATFORM_ROLES:
             os.environ["AGENT_ROLE"] = role.key
             modules[role.key] = _load(ROOT / "agents" / "run.py", f"_test_agent_{role.key}")
-        for seller in SELLER_AGENTS:
-            os.environ["SELLER_ID"] = seller.key
-            modules[seller.key] = _load(ROOT / "sellers" / "run.py", f"_test_seller_{seller.key}")
     finally:
         for key, value in saved.items():
             if value is None:
@@ -214,7 +193,7 @@ def agent_network(
 
     monkeypatch.setattr(clock, "utc_now", shifted_now)
     for name, module in list(sys.modules.items()):
-        if name.startswith(("resourcepilot.", "sellers.")) and hasattr(module, "utc_now"):
+        if name.startswith("resourcepilot.") and hasattr(module, "utc_now"):
             monkeypatch.setattr(module, "utc_now", shifted_now)
     for key, module in modules.items():
         monkeypatch.setattr(module, "store", network.store)

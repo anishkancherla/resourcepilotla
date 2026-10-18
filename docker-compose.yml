@@ -30,7 +30,7 @@ services:
       timeout: 3s
       retries: 20
 
-  # Nine ResourcePilot platform agents.
+  # Seven ResourcePilot agents, each its own uAgent process run by agents/run.py.
   orchestrator:
     <<: *agent
     environment:
@@ -47,13 +47,21 @@ services:
       AGENT_PORT: ${INTAKE_PORT}
     ports: ["127.0.0.1:${INTAKE_PORT}:18000"]
 
-  discovery:
+  researcher:
     <<: *agent
     environment:
       AGENT_MODULE: agents.run
-      AGENT_ROLE: discovery
-      AGENT_PORT: ${DISCOVERY_PORT}
-    ports: ["127.0.0.1:${DISCOVERY_PORT}:18000"]
+      AGENT_ROLE: researcher
+      AGENT_PORT: ${RESEARCHER_PORT}
+    ports: ["127.0.0.1:${RESEARCHER_PORT}:18000"]
+
+  campus-rooms:
+    <<: *agent
+    environment:
+      AGENT_MODULE: agents.run
+      AGENT_ROLE: campus_rooms
+      AGENT_PORT: ${CAMPUS_ROOMS_PORT}
+    ports: ["127.0.0.1:${CAMPUS_ROOMS_PORT}:18000"]
 
   verification:
     <<: *agent
@@ -63,14 +71,6 @@ services:
       AGENT_PORT: ${VERIFICATION_PORT}
     ports: ["127.0.0.1:${VERIFICATION_PORT}:18000"]
 
-  analysis:
-    <<: *agent
-    environment:
-      AGENT_MODULE: agents.run
-      AGENT_ROLE: analysis
-      AGENT_PORT: ${ANALYSIS_PORT}
-    ports: ["127.0.0.1:${ANALYSIS_PORT}:18000"]
-
   planner:
     <<: *agent
     environment:
@@ -79,14 +79,6 @@ services:
       AGENT_PORT: ${PLANNER_PORT}
     ports: ["127.0.0.1:${PLANNER_PORT}:18000"]
 
-  fulfillment:
-    <<: *agent
-    environment:
-      AGENT_MODULE: agents.run
-      AGENT_ROLE: fulfillment
-      AGENT_PORT: ${FULFILLMENT_PORT}
-    ports: ["127.0.0.1:${FULFILLMENT_PORT}:18000"]
-
   memory-audit:
     <<: *agent
     environment:
@@ -94,63 +86,6 @@ services:
       AGENT_ROLE: memory_audit
       AGENT_PORT: ${MEMORY_AUDIT_PORT}
     ports: ["127.0.0.1:${MEMORY_AUDIT_PORT}:18000"]
-
-  researcher:
-    <<: *agent
-    environment:
-      AGENT_MODULE: agents.run
-      AGENT_ROLE: researcher
-      AGENT_PORT: ${RESEARCHER_PORT}
-    ports: ["127.0.0.1:${RESEARCHER_PORT}:18000"]
-
-  # Five independent demo seller agents, then the live Campus Rooms seller.
-  westwood-print:
-    <<: *agent
-    environment:
-      AGENT_MODULE: sellers.run
-      SELLER_ID: westwood_print
-      AGENT_PORT: ${WESTWOOD_PRINT_PORT}
-    ports: ["127.0.0.1:${WESTWOOD_PRINT_PORT}:18000"]
-
-  gayley-copy:
-    <<: *agent
-    environment:
-      AGENT_MODULE: sellers.run
-      SELLER_ID: gayley_copy
-      AGENT_PORT: ${GAYLEY_COPY_PORT}
-    ports: ["127.0.0.1:${GAYLEY_COPY_PORT}:18000"]
-
-  flash-prints:
-    <<: *agent
-    environment:
-      AGENT_MODULE: sellers.run
-      SELLER_ID: flash_prints
-      AGENT_PORT: ${FLASH_PRINTS_PORT}
-    ports: ["127.0.0.1:${FLASH_PRINTS_PORT}:18000"]
-
-  gear-share:
-    <<: *agent
-    environment:
-      AGENT_MODULE: sellers.run
-      SELLER_ID: gear_share
-      AGENT_PORT: ${GEAR_SHARE_PORT}
-    ports: ["127.0.0.1:${GEAR_SHARE_PORT}:18000"]
-
-  studio-rooms:
-    <<: *agent
-    environment:
-      AGENT_MODULE: sellers.run
-      SELLER_ID: studio_rooms
-      AGENT_PORT: ${STUDIO_ROOMS_PORT}
-    ports: ["127.0.0.1:${STUDIO_ROOMS_PORT}:18000"]
-
-  campus-rooms:
-    <<: *agent
-    environment:
-      AGENT_MODULE: sellers.run
-      SELLER_ID: campus_rooms
-      AGENT_PORT: ${CAMPUS_ROOMS_PORT}
-    ports: ["127.0.0.1:${CAMPUS_ROOMS_PORT}:18000"]
 
 volumes:
   postgres-data:

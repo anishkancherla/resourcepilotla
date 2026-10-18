@@ -4,23 +4,31 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from resourcepilot.config import ALL_AGENTS, PLATFORM_ROLES, SELLER_AGENTS
+from resourcepilot.config import ALL_AGENTS, PLATFORM_ROLES
 
 ROOT = Path(__file__).resolve().parents[1]
 COMPOSE = (ROOT / "docker-compose.yml").read_text()
 RUNTIME = (ROOT / "agents" / "run.py").read_text()
-SELLER_RUNTIME = (ROOT / "sellers" / "run.py").read_text()
+REMOVED = (
+    "sellers",
+    "resourcepilot/bundles.py",
+    "resourcepilot/checkout.py",
+    "resourcepilot/escrow.py",
+    "resourcepilot/logistics.py",
+    "resourcepilot/payment.py",
+    "resourcepilot/pricing.py",
+    "resourcepilot/protocols.py",
+    "resourcepilot/registry.py",
+    "scripts/demo_payment_buyer.py",
+)
 
 
 def test_compose_runs_every_agent_as_its_own_service() -> None:
     for role in PLATFORM_ROLES:
         assert f"  {role.compose_service}:\n" in COMPOSE
         assert f"AGENT_ROLE: {role.key}\n" in COMPOSE
-    for seller in SELLER_AGENTS:
-        assert f"  {seller.compose_service}:\n" in COMPOSE
-        assert f"SELLER_ID: {seller.key}\n" in COMPOSE
     assert COMPOSE.count("AGENT_MODULE: agents.run") == len(PLATFORM_ROLES)
-    assert COMPOSE.count("AGENT_MODULE: sellers.run") == len(SELLER_AGENTS)
+    assert "SELLER_ID" not in COMPOSE
 
 
 def test_every_published_port_is_loopback_only() -> None:
@@ -31,6 +39,7 @@ def test_every_published_port_is_loopback_only() -> None:
     dockerfile = (ROOT / "Dockerfile").read_text()
     assert 'CMD ["python", "-m", "resourcepilot.container_entrypoint"]' in dockerfile
     assert "USER app" in dockerfile
+    assert "sellers" not in dockerfile
 
 
 def test_containers_share_postgres_as_the_durable_store() -> None:
@@ -47,59 +56,41 @@ def test_every_agent_has_a_profile_readme_naming_its_protocols() -> None:
         assert "Protocols:" in readme.read_text()
 
 
-def test_platform_runtime_publishes_manifests_and_delegates_with_ctx_send() -> None:
+def test_runtime_publishes_manifests_and_delegates_with_ctx_send() -> None:
     assert "Protocol(spec=chat_protocol_spec)" in RUNTIME
     assert "agent.include(chat_proto, publish_manifest=True)" in RUNTIME
     assert "agent.include(task_proto, publish_manifest=True)" in RUNTIME
     assert "await ctx.send(ADDRESSES[task.target_role], task)" in RUNTIME
-    assert 'Protocol(spec=resource_hold_spec, role="buyer")' in RUNTIME
-    assert "agent.include(hold_proto, publish_manifest=True)" in RUNTIME
-
-
-def test_orchestrator_is_the_official_payment_seller() -> None:
-    assert 'Protocol(spec=payment_protocol_spec, role="seller")' in RUNTIME
-    assert "agent.include(payment_proto, publish_manifest=True)" in RUNTIME
-    for message in ("RequestPayment(", "CompletePayment(", "CancelPayment("):
-        assert message in RUNTIME
-    assert "from uagents_core.contrib.protocols.payment import" in RUNTIME
     assert "from uagents_core.contrib.protocols.chat import" in RUNTIME
 
 
-def test_sellers_speak_the_resource_hold_seller_role() -> None:
-    assert 'Protocol(spec=resource_hold_spec, role="seller")' in SELLER_RUNTIME
-    assert "agent.include(hold_proto, publish_manifest=True)" in SELLER_RUNTIME
-    assert "agent.include(chat_proto, publish_manifest=True)" in SELLER_RUNTIME
-    # Sellers never take buyer payments; the Orchestrator's escrow does.
-    assert "payment_protocol_spec" not in SELLER_RUNTIME
-
-
-def test_mock_stripe_is_named_and_documented_as_moving_no_money() -> None:
-    payment = (ROOT / "resourcepilot" / "payment.py").read_text()
-    assert 'STRIPE_MOCK = "stripe_mock"' in payment
-    assert "No Stripe API call, no funds moved" in payment
-    assert "import stripe" not in payment
-    for path in ROOT.rglob("*.py"):
-        if {".venv", "tests"} & set(path.relative_to(ROOT).parts):
-            continue
-        assert "import stripe" not in path.read_text(), path
-
-
-def test_fifteen_real_agents_and_only_live_roles_fetch_the_web() -> None:
-    assert len(ALL_AGENTS) == 15
-    assert {"researcher", "campus_rooms"} <= {identity.key for identity in ALL_AGENTS}
+def test_seven_real_agents_and_only_live_roles_fetch_the_web() -> None:
+    assert len(ALL_AGENTS) == 7
+    assert [identity.key for identity in ALL_AGENTS] == [
+        "orchestrator",
+        "intake",
+        "researcher",
+        "campus_rooms",
+        "verification",
+        "planner",
+        "memory_audit",
+    ]
+    assert len({identity.port for identity in ALL_AGENTS}) == 7
     importers = sorted(
         str(path.relative_to(ROOT))
-        for path in (*ROOT.glob("agents/*.py"), *ROOT.glob("sellers/*.py"))
-        if "resourcepilot.http" in path.read_text()
+        for path in (*ROOT.glob("agents/*.py"), *ROOT.glob("resourcepilot/*.py"))
+        if "resourcepilot.http import" in path.read_text()
     )
-    # agents/run.py hosts the Researcher and Verification's link re-checks; sellers/run.py
-    # serves Campus Rooms. No demo seller reads the web.
-    assert importers == ["agents/run.py", "sellers/live_rooms.py", "sellers/run.py"]
-    assert "httpx" not in (ROOT / "sellers" / "inventory.py").read_text()
+    # agents/run.py hosts the Researcher, Campus Rooms, and Verification's link re-checks.
+    assert importers == ["agents/run.py", "resourcepilot/research.py", "resourcepilot/rooms.py"]
 
 
-def test_campus_rooms_never_holds_money() -> None:
-    live = (ROOT / "sellers" / "live_rooms.py").read_text()
-    assert "subtotal_cents=0" in live
-    assert '"unit_price_cents": 0' in live
-    assert "payment_protocol_spec" not in live
+def test_no_payment_code_or_demo_shops_remain() -> None:
+    for relative in REMOVED:
+        assert not (ROOT / relative).exists(), relative
+    for path in (*ROOT.glob("agents/*.py"), *ROOT.glob("resourcepilot/*.py")):
+        text = path.read_text()
+        assert "payment_protocol_spec" not in text, path
+        assert "resource_hold_spec" not in text, path
+        assert "import stripe" not in text, path
+        assert "cosmpy" not in text, path

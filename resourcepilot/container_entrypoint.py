@@ -8,8 +8,8 @@ The relay is the container's published port. It forwards bytes to the uAgent on 
 same network namespace, preserving the framework's local-only security check. Compose also binds
 every published host port to 127.0.0.1 only.
 
-AGENT_MODULE picks the runtime: ``agents.run`` for the eight platform roles (selected by
-AGENT_ROLE) or ``sellers.run`` for the demo seller agents (selected by SELLER_ID).
+AGENT_MODULE picks the runtime: ``agents.run``, which runs every one of the seven agents
+(selected by AGENT_ROLE).
 """
 
 from __future__ import annotations
@@ -22,7 +22,7 @@ import sys
 from collections.abc import Awaitable, Callable
 
 RELAY_PORT = int(os.getenv("INSPECTOR_RELAY_PORT", "18000"))
-AGENT_MODULES = {"agents.run", "sellers.run"}
+AGENT_MODULES = {"agents.run"}
 
 
 async def _copy(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:

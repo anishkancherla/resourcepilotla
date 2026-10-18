@@ -1,24 +1,22 @@
 # ResourcePilot Orchestrator
 
-The ASI:One entrypoint for ResourcePilot: campus services for a student's first weeks, at any US
-school. Everything runs on buttons and short forms.
+The ASI:One entrypoint for ResourcePilot: campus help for a student's first weeks, at any US
+school. Everything runs on buttons and short forms, and every reply is a card.
 
 - **Study rooms.** Enter your school email and a time. The Campus Researcher finds your library's
   room system, and Campus Rooms shows real open rooms. ResourcePilot re-checks the room you pick
   and hands you the school's booking link; you book with your own sign-in. It is always free.
 - **Campus housing.** IPEDS dorm beds, typical room and board, and meal plans, plus your housing
-  office and application portal, re-checked live. You apply on the school's site.
-- **Project bundle.** A labeled demo: a camera, a podcast studio, and posters from five demo shops
-  near UCLA. It is held all at once before you pay, and you can add a free study room at your
-  school. Payment is a Mock Stripe checkout that makes no Stripe API call and moves no money, or
-  faucet-issued Fetch stable-testnet FET.
-- **My bookings.**
+  office and application portal, each link re-checked. You apply on the school's site.
+- **My bookings.** Your recent re-checked rooms and their booking links.
 
-It owns the workflow, the interactive cards, and escrow payment. It delegates every step to
-separately addressed agents: Intake, Campus Researcher, Seller Discovery, Seller Verification,
-Logistics Analysis, Bundle Planner, Checkout Coordinator, and Memory and Audit. Nothing is charged
-until every paid seller has confirmed a hold, and sellers are paid only after every booking
-commits. If a booking fails after payment, the payment stays in escrow for a retry and is refunded
-automatically if you do not retry.
+It owns the chat, the services menu, the cards, and the workflow. It delegates every step with
+`ctx.send` to separately addressed agents: Intake, Campus Researcher, Campus Rooms, Verification,
+Planner, and Memory and Audit. It accepts only results from the agent it asked, for the request it
+is waiting on, and it retries a silent step once. If a room is taken when it is re-checked, the
+Planner shows you the other open rooms.
 
-Protocols: Agent Chat Protocol, ResourcePilotTasks, Agent Payment Protocol (`seller`).
+It never takes payment, never reserves a room, and never applies for housing. Free text gets the
+services menu; it never starts a request from prose.
+
+Protocols: Agent Chat Protocol, ResourcePilotTasks.

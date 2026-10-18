@@ -1,79 +1,80 @@
-# Demo script (about three and a half minutes)
+# Demo script (about three minutes)
 
 Before recording:
 
-1. Run `make start` and connect all 15 agents with Mailbox.
-2. Set `SELLER_DEMO_CONTROLS=true` in `.env`, then restart with `make stop` and
-   `make start`. The flag adds Simulate outage and Restore service buttons to each demo seller's
-   own profile chat.
-3. Open ASI:One and start a chat with the ResourcePilot Orchestrator.
-4. Have a school email ready. Use one at a LibCal school for the room step (for example
-   Purdue, UCR, or UCLA), and know one school that needs the paste-link card (for example MIT).
+1. Run `make start` and connect all seven agents with Mailbox.
+2. Open ASI:One and start a chat with the ResourcePilot Orchestrator.
+3. Have a school email ready at a LibCal school for the room steps (for example Purdue, UCR, or
+   UCLA). Know one school that gets the paste-link card (for example MIT), and have its library's
+   room-booking link ready. Try both the day before: library sites change.
+4. For the taken-room reroute, you need the slot to be taken between the carousel and the
+   re-check. The honest way is to book that slot yourself on the school's booking page, in another
+   tab with your own school sign-in, and cancel it after recording. If you cannot, use the test in
+   step 3 instead.
 
 ## 1. The services menu (15 s)
 
 Say "hi". The Orchestrator answers with the campus services menu: **Study rooms**, **Campus
-housing**, **Project bundle**, and **My bookings**. Type a sentence instead, and it answers with
-the same menu: every request starts from a button and a short form.
+housing**, and **My bookings**. Type a sentence instead, and it answers with the same menu: every
+request starts from a button and a short form.
 
-## 2. A real study room at any school (60 s)
+## 2. A real study room at any school (55 s)
 
 Press **Open study rooms**. Enter your school email, a day, a time of day, a duration, and the
 group size, then press **Find open rooms**.
 
 While the progress card moves, say: "Intake keeps only the domain. The Campus Researcher matched
 the school in IPEDS and found its LibCal site." For Purdue, that site lives at
-`calendar.lib.purdue.edu`, not on `libcal.com`. "Campus Rooms, a separate seller agent, is
-reading which rooms are open right now."
+`calendar.lib.purdue.edu`, not on `libcal.com`. "Campus Rooms, a separate agent, is reading which
+rooms are open right now, and Verification checks every offer before the Planner ranks them."
 
-The carousel shows real rooms, earliest first, each with a **Live · LibCal** badge. Open one and
-press **Re-check this room**. The review card says **Still open**; press **Get booking link**.
-The receipt is the school's own booking link. Say: "It's free, and ResourcePilot never reserves
-the room. You book it with your own sign-in."
+The carousel shows real rooms, earliest first, each with a **Live · LibCal** badge. Press **View
+room** on one, then **Re-check this room**. Campus Rooms reads that slot again, and the **Your
+booking link** card arrives with the room, the time, and the school's own link. Say: "It's free,
+and ResourcePilot never reserves the room. You book it with your own sign-in."
 
-Optional: repeat with an MIT email. The Researcher finds no system it recognizes, so it asks for
-the link instead of guessing.
+## 3. A room taken during the re-check (30 s)
 
-## 3. Campus housing (30 s)
+Press **Find another room** and run the same search. Open a room, and before you re-check it, book
+that slot yourself in the other tab. Back in ASI:One, press **Re-check this room**. The
+Orchestrator says "Someone just booked that time; pick another room", the Planner runs again
+without that room, and a new carousel shows the other open rooms. Say: "Only that room was
+dropped, not the whole search." Cancel your booking in the other tab afterwards.
 
-From the menu, press **Open campus housing** and enter the same email. The card shows IPEDS
-facts (dorm beds, typical room and board, meal plans), the housing office, and the application
-portal. Point at **Sources**: "Seller Verification re-opened each official link itself."
+If you cannot take a slot live, show the same path in the test suite instead:
 
-## 4. The project bundle: many sellers, one payment (60 s)
+```bash
+uv run pytest tests/test_network.py -k taken -v
+```
 
-Press **Open project bundle**. The form says plainly that these are demo shops near UCLA. Pick a
-DSLR, the podcast studio, and 20 posters on Friday from 3 PM for 3 hours, with a $35 budget.
+## 4. No booking system found: the paste-link card (25 s)
 
-The carousel narration says **Excluded for identity: Flash Prints 4U.** It was the cheapest print
-shop, but it has no verified identity. Open a bundle and press **Why not others?**:
+Press **Find another room** and search with the MIT email. The Researcher finds no system it
+recognizes, so it asks instead of guessing: a card with one field for the room-booking link.
+Paste the library's
+booking link and press **Check this link**. The Researcher checks the pasted link with the same
+rules as one it found itself. Optional: paste a link on another domain first, and the same card
+comes back with the reason.
 
-- **Identity:** Flash Prints 4U is unverified.
-- **Policy:** the DSLR requires gear-share training, so the bundle substitutes a mirrorless kit.
+## 5. Campus housing (25 s)
 
-In another tab, open Westwood Print Lab's profile chat and press **Simulate outage**. Back in the
-Orchestrator chat, press **Hold everything**. After about 15 seconds a new carousel arrives:
-**Rerouted around: Westwood Print Lab.** Gayley Copy Center now supplies the posters, and nothing
-was charged.
+Press **Menu**, then **Open campus housing**, and enter the same email. The card shows IPEDS facts
+(dorm beds, typical room and board, meal plans), the housing office, and the application portal.
+Point at **Sources**: "Verification re-opened each official link itself. You apply on the school's
+site."
 
-## 5. Pay once, into escrow (35 s)
+## 6. My bookings (10 s)
 
-Open the rerouted bundle and press **Hold everything**. The review card shows that every seller
-is holding, and when the holds expire. Press **Choose payment**. The card offers **Mock Stripe**,
-which moves no money, and **Pay test FET**. The Orchestrator then sends an official
-`RequestPayment`.
+Press **Menu**, then **My bookings**. The room from step 2 is there with its booking link.
 
-ResourcePilot does not control whether ASI:One itself can answer a `stripe_mock` request. To show
-a complete no-money booking, run `make stripe-mock` in a terminal. That starts a separate buyer
-agent that books its own bundle through the same cards and commits a Mock Stripe payment. For the
-Fetch-native rail, pay the requested amount from a faucet-funded stable-testnet wallet.
+## 7. An agent profile chat (15 s)
 
-The receipt shows one confirmation code per seller, the payment rail, each seller's payout from
-escrow, and the booking fee ResourcePilot kept.
+Open the Campus Rooms profile on Agentverse. Show its README and its Chat and Tasks manifests, then
+send it a message. It answers with its status card, which names its role and has a **Use
+ResourcePilot** button that points back to the Orchestrator. Say: "Seven separate agents, each
+with its own address and job."
 
-## 6. Close (10 s)
+## 8. Close (5 s)
 
-Say: "Fifteen agents. Free rooms at any school, housing facts with official links, and one payment
-for many sellers, with nobody paid until everybody delivered." Then press **My bookings**.
-
-Afterwards, restore Westwood Print Lab from its profile chat.
+Say: "Free study rooms at any school, re-checked live, and housing facts with official links. No
+payments, no reservations, and you always book with your own sign-in."

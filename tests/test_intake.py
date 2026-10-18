@@ -1,18 +1,20 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timedelta
 
 import pytest
 
+from resourcepilot import intake
 from resourcepilot.clock import CAMPUS_TZ
 from resourcepilot.intake import (
-    build_brief,
-    bundle_brief,
+    MAX_DAYS_AHEAD,
+    MAX_GROUP,
+    ROOM_DURATIONS,
+    SERVICES,
+    brief_zone,
     describe_window,
-    from_form,
     housing_brief,
     intake_handler,
-    missing_fields,
     room_brief,
     scrub_fields,
     upcoming_days,
@@ -20,129 +22,129 @@ from resourcepilot.intake import (
 
 # Wednesday Oct 21 2026, 10 AM campus time.
 NOW = datetime(2026, 10, 21, 10, 0, tzinfo=CAMPUS_TZ)
-BUNDLE = {
-    "camera": "dslr",
-    "room": "podcast_room",
-    "posters": "20",
-    "day": "2026-10-23",
-    "start_hour": "15",
-    "hours": "3",
-    "budget": "35",
-    "priority": "cheapest",
-    "anchor": "student_union",
-}
 ROOM = {"school_domain": "purdue.edu", "day": "2026-10-22", "window": "afternoon"}
 
 
-def test_bundle_form_builds_a_campus_local_brief() -> None:
-    brief = bundle_brief(BUNDLE, now=NOW)
-    assert brief["service"] == "bundle"
-    assert brief["items"] == {"camera": 1, "podcast_room": 1, "posters": 20}
-    assert brief["camera_type"] == "dslr"
-    assert brief["window_start"] == "2026-10-23T15:00:00-07:00"
-    assert brief["hours"] == 3
-    assert brief["budget_cents"] == 3500
-    assert brief["has_training"] is False
-    assert describe_window(brief) == "Fri Oct 23, 3 PM-6 PM"
-    assert "school_domain" not in brief
+def test_only_rooms_and_housing_are_offered() -> None:
+    assert SERVICES == ("rooms", "housing")
+    for removed in ("bundle_brief", "build_brief", "from_form", "SAVED_PREFERENCES", "ANCHORS"):
+        assert not hasattr(intake, removed), removed
 
 
-def test_form_choices_carry_through() -> None:
-    fields = {**BUNDLE, "priority": "closest", "anchor": "north_dorms", "has_training": "true"}
-    brief = bundle_brief(fields, now=NOW)
-    assert (brief["priority"], brief["anchor"], brief["has_training"]) == (
-        "closest",
-        "north_dorms",
-        True,
-    )
-    payload = {"service": "bundle", "fields": fields, "now": NOW.isoformat()}
-    assert intake_handler(payload)["brief"] == brief
-
-
-def test_saved_preferences_fill_only_blank_choices() -> None:
-    fields = {**BUNDLE, "priority": "", "anchor": "main_library"}
-    saved = {"priority": "best_rated", "anchor": "north_dorms"}
-    brief = intake_handler(
-        {"service": "bundle", "fields": fields, "saved_preferences": saved, "now": NOW.isoformat()}
-    )["brief"]
-    assert brief["priority"] == "best_rated"
-    assert brief["anchor"] == "main_library"
-
-
-def test_incomplete_form_reports_missing_fields() -> None:
-    request = from_form({"posters": "0"})
-    assert set(missing_fields(request)) >= {"day", "start", "end", "budget_cents"}
-    with pytest.raises(ValueError, match="Missing"):
-        build_brief(request, now=NOW)
-
-
-@pytest.mark.parametrize(
-    ("overrides", "message"),
-    [
-        ({"day": "2026-10-21", "start_hour": "8", "hours": "1"}, "future"),
-        ({"budget": "900"}, "Budget"),
-        ({"start_hour": "9", "hours": "12"}, "between 30 minutes"),
-        ({"posters": "600"}, "Poster quantity"),
-    ],
-)
-def test_bundle_validation(overrides: dict[str, str], message: str) -> None:
-    with pytest.raises(ValueError, match=message):
-        bundle_brief({**BUNDLE, **overrides}, now=NOW)
-
-
-def test_free_study_room_in_a_bundle_needs_a_school_email() -> None:
-    fields = {**BUNDLE, "room": "study_room"}
-    with pytest.raises(ValueError, match="school email"):
-        bundle_brief(fields, now=NOW)
-    brief = bundle_brief(scrub_fields({**fields, "email": "pat@purdue.edu"}), now=NOW)
-    assert brief["school_domain"] == "purdue.edu"
-    assert brief["items"]["study_room"] == 1
-
-
-def test_email_is_reduced_to_its_school_domain_before_anything_else() -> None:
-    # The Researcher maps a department subdomain to its institution; the name never travels.
-    clean = scrub_fields({"email": "Pat.Lee+rooms@CS.Purdue.edu", "day": "2026-10-22"})
-    assert clean == {"school_domain": "cs.purdue.edu", "day": "2026-10-22"}
-    bad = scrub_fields({"email": "not an email"})
-    assert bad == {"school_domain": "", "email_invalid": True}
-    with pytest.raises(ValueError, match="valid school email"):
-        housing_brief(bad)
-
-
-def test_room_brief_is_free_and_leaves_the_window_to_the_researcher() -> None:
+def test_room_brief_is_bounded_and_leaves_the_window_to_the_researcher() -> None:
     brief = room_brief({**ROOM, "duration": "90", "group_size": "4"}, now=NOW)
-    assert brief["service"] == "rooms"
-    assert brief["items"] == {"study_room": 1}
-    assert brief["budget_cents"] == 0
-    assert (brief["duration_minutes"], brief["group_size"]) == (90, 4)
-    assert "window_start" not in brief
+    assert brief == {
+        "service": "rooms",
+        "school_domain": "purdue.edu",
+        "day": "2026-10-22",
+        "window": "afternoon",
+        "duration_minutes": 90,
+        "hours": 1.5,
+        "group_size": 4,
+    }
+
+
+def test_room_brief_defaults_to_one_person_for_an_hour_in_the_afternoon() -> None:
+    brief = room_brief({"school_domain": "PURDUE.EDU", "day": "2026-10-21"}, now=NOW)
+    assert (brief["school_domain"], brief["window"]) == ("purdue.edu", "afternoon")
+    assert (brief["duration_minutes"], brief["hours"], brief["group_size"]) == (60, 1.0, 1)
 
 
 @pytest.mark.parametrize(
     ("overrides", "message"),
     [
         ({"school_domain": ""}, "school email"),
+        ({"email_invalid": True}, "valid school email"),
+        ({"school_domain": "localhost"}, "school email"),
+        ({"day": ""}, "a day from the list"),
+        ({"day": "Friday"}, "a day from the list"),
+        ({"day": "2026-10-19"}, "within the next"),
         ({"day": "2026-11-30"}, "within the next"),
         ({"window": "midnight"}, "time of day"),
+        ({"duration": "45"}, "time of day and a duration"),
         ({"group_size": "40"}, "People"),
+        ({"group_size": "0.5"}, "People"),
+        ({"group_size": "many"}, "People"),
     ],
 )
-def test_room_validation(overrides: dict[str, str], message: str) -> None:
+def test_room_validation(overrides: dict[str, object], message: str) -> None:
     with pytest.raises(ValueError, match=message):
         room_brief({**ROOM, **overrides}, now=NOW)
 
 
+def test_room_day_range_matches_the_form() -> None:
+    # Yesterday is still accepted (a late-evening search can straddle midnight), as is the last
+    # day the form offers.
+    assert room_brief({**ROOM, "day": "2026-10-20"}, now=NOW)["day"] == "2026-10-20"
+    last = (NOW.date() + timedelta(days=MAX_DAYS_AHEAD - 1)).isoformat()
+    assert room_brief({**ROOM, "day": last}, now=NOW)["day"] == last
+    too_far = (NOW.date() + timedelta(days=MAX_DAYS_AHEAD)).isoformat()
+    with pytest.raises(ValueError, match="within the next"):
+        room_brief({**ROOM, "day": too_far}, now=NOW)
+    assert room_brief({**ROOM, "group_size": str(MAX_GROUP)}, now=NOW)["group_size"] == MAX_GROUP
+    for duration in ROOM_DURATIONS:
+        assert room_brief({**ROOM, "duration": duration}, now=NOW)["duration_minutes"] == int(
+            duration
+        )
+
+
 def test_housing_needs_only_the_school() -> None:
-    assert housing_brief({"school_domain": "purdue.edu"}) == {
+    assert housing_brief({"school_domain": "purdue.edu", "day": "ignored"}) == {
         "service": "housing",
         "school_domain": "purdue.edu",
-        "items": {},
     }
+    with pytest.raises(ValueError, match="housing office"):
+        housing_brief({})
+
+
+def test_email_is_reduced_to_its_school_domain_before_anything_else() -> None:
+    # The Researcher maps a department subdomain to its institution; the name never travels.
+    clean = scrub_fields({"email": "Pat.Lee+rooms@CS.Purdue.edu", "day": "2026-10-22"})
+    assert clean == {"school_domain": "cs.purdue.edu", "day": "2026-10-22"}
+    assert "pat" not in str(clean).lower()
+    assert scrub_fields({"school_email": "sam@mit.edu"}) == {"school_domain": "mit.edu"}
+    assert scrub_fields({"day": "2026-10-22"}) == {"day": "2026-10-22"}
+    bad = scrub_fields({"email": "not an email"})
+    assert bad == {"school_domain": "", "email_invalid": True}
+    with pytest.raises(ValueError, match="valid school email"):
+        housing_brief(bad)
+
+
+def test_handler_routes_by_service_and_never_keeps_the_local_part() -> None:
+    fields = scrub_fields({**ROOM, "school_domain": "", "email": "pat@cs.purdue.edu"})
+    payload = {"service": "rooms", "fields": fields, "now": NOW.isoformat()}
+    brief = intake_handler(payload)["brief"]
+    assert brief == room_brief(fields, now=NOW)
+    assert brief["school_domain"] == "cs.purdue.edu"
+    assert "pat" not in str(brief)
+    housing = intake_handler({"fields": {"service": "housing", "school_domain": "purdue.edu"}})
+    assert housing["brief"]["service"] == "housing"
+
+
+@pytest.mark.parametrize("service", ["bundle", "pharmacy", ""])
+def test_unknown_service_is_refused(service: str) -> None:
     with pytest.raises(ValueError, match="Unknown service"):
-        intake_handler({"service": "pharmacy", "fields": {}})
+        intake_handler({"service": service, "fields": dict(ROOM), "now": NOW.isoformat()})
+
+
+def test_window_is_described_in_the_schools_timezone() -> None:
+    brief = {
+        "window_start": "2026-10-22T12:00:00-04:00",
+        "window_end": "2026-10-22T17:30:00-04:00",
+        "timezone": "America/Indiana/Indianapolis",
+    }
+    assert str(brief_zone(brief)) == "America/Indiana/Indianapolis"
+    assert describe_window(brief) == "Thu Oct 22, 12 PM-5:30 PM"
+    pacific = {key: value for key, value in brief.items() if key != "timezone"}
+    assert str(brief_zone(pacific)) == "America/Los_Angeles"
+    assert describe_window(pacific) == "Thu Oct 22, 9 AM-2:30 PM"
 
 
 def test_upcoming_days_are_local_select_options() -> None:
     days = upcoming_days(NOW, 3)
-    assert days[0] == ("2026-10-21", "Wed Oct 21")
-    assert len(days) == 3
+    assert days == [
+        ("2026-10-21", "Wed Oct 21"),
+        ("2026-10-22", "Thu Oct 22"),
+        ("2026-10-23", "Fri Oct 23"),
+    ]
+    assert len(upcoming_days(NOW)) == 7

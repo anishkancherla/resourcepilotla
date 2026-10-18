@@ -1,33 +1,28 @@
 """ASI:One cards for every Orchestrator reply, plus profile status cards for every agent.
 
+ResourcePilot offers two campus services from a menu: free study rooms at the student's own
+school and campus housing facts with official links. Every reply is a card: the menu, a short
+form, progress, a carousel of open rooms, a room detail, the booking-link receipt, the housing
+card, and recent bookings. ResourcePilot never reserves a room or applies for housing, so no card
+asks for payment.
+
 Every payload uses only the fields documented on the Innovation Lab interactive-cards page.
 ASI:One silently falls back to plain text when a payload has an unexpected shape, so
-``card_message`` rejects anything else before it is sent.
+``card_message`` rejects anything else before it is sent. Selections carry stable workflow and
+option IDs; the prose fallback in ``parse_selection`` only opens menus and views.
 """
 
 from __future__ import annotations
 
 import json
 import re
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from typing import Any
 from uuid import uuid4
-from zoneinfo import ZoneInfo
 
 from uagents_core.contrib.protocols.chat import ChatMessage, MetadataContent, TextContent
 
-from resourcepilot.clock import CAMPUS_TZ, parse, utc_now
-from resourcepilot.escrow import note_for, rail_label
-from resourcepilot.intake import (
-    ANCHORS,
-    PRIORITIES,
-    ROOM_DURATIONS,
-    brief_zone,
-    describe_window,
-    upcoming_days,
-)
-from resourcepilot.pricing import usd
-from resourcepilot.registry import CATEGORIES
+from resourcepilot.intake import ROOM_DURATIONS, describe_window, upcoming_days
 from resourcepilot.research import WINDOWS
 
 CARD_LIMIT_BYTES = 64 * 1024
@@ -67,24 +62,33 @@ CUSTOM_FIELDS = {
 }
 LIST_ITEM_FIELDS = {"children", "action"}
 
-# Bounded allowlist for planner-mediated prose. Consequential actions still require the
-# stable workflow and bundle IDs that only a card selection carries.
+# Every action a card selection can carry; the Orchestrator routes exactly these.
 KNOWN_ACTIONS = (
-    "open_orchestrator",
-    "show_status",
-    "show_vetting",
-    "show_bookings",
-    "simulate_outage",
-    "restore_service",
     "start_over",
+    "open_service",
+    "submit_form",
+    "show_bookings",
+    "show_status",
+    "view_room",
+    "recheck_room",
+    "show_results",
+    "submit_link",
+    "open_orchestrator",
 )
+# Bounded allowlist for planner-mediated prose: it only opens menus and views. Submitting a form,
+# re-checking a room, or submitting a link needs the stable IDs that only a card selection carries.
+PROSE_ACTIONS = ("open_orchestrator", "show_status", "show_results", "show_bookings", "start_over")
 # Prose that only opens a service's form, never submits one.
 SERVICE_WORDS = (
     ("rooms", re.compile(r"\bstudy\s*rooms?\b|\blibrary\s+rooms?\b|\bbook\s+a\s+room\b", re.I)),
     ("housing", re.compile(r"\bhousing\b|\bdorms?\b|\bresidence\s+halls?\b", re.I)),
-    ("bundle", re.compile(r"\bproject\s+bundle\b|\bdemo\s+bundle\b|\bdemo\s+shops?\b", re.I)),
 )
-SERVICE_TITLES = {"rooms": "Study rooms", "housing": "Campus housing", "bundle": "Project bundle"}
+SERVICE_TITLES = {"rooms": "Study rooms", "housing": "Campus housing"}
+HOW_ROOMS_WORK = (
+    "ResourcePilot re-checks the room live, then you book it on your school's site with your "
+    "own sign-in. Nothing is reserved for you."
+)
+NOT_RESERVED = "Not reserved by ResourcePilot: book it with your own sign-in"
 
 
 # ---------------------------------------------------------------------------
@@ -210,7 +214,7 @@ def card_message(
     )
 
 
-def parse_selection(text: str, known_actions: tuple[str, ...] = KNOWN_ACTIONS) -> dict[str, Any]:
+def parse_selection(text: str, known_actions: tuple[str, ...] = PROSE_ACTIONS) -> dict[str, Any]:
     """Parse direct JSON selections first, then a bounded allowlist of prose actions."""
     raw = re.sub(r"^(?:@\S+\s+)+", "", (text or "").strip())
     try:
@@ -250,10 +254,6 @@ def _buttons(actions: list[tuple[str, dict[str, Any]]]) -> dict[str, Any]:
     }
 
 
-def _zone_time(value: str, zone: ZoneInfo = CAMPUS_TZ) -> str:
-    return f"{parse(value).astimezone(zone):%-I:%M %p}"
-
-
 # ---------------------------------------------------------------------------
 # Profile status, menu, and notices
 # ---------------------------------------------------------------------------
@@ -268,7 +268,7 @@ def status_card(
     facts: list[str] | None = None,
     extra_buttons: list[dict[str, Any]] | None = None,
 ) -> tuple[str, dict[str, Any]]:
-    """Profile chat card shared by specialists and sellers; it points to the Orchestrator."""
+    """Profile chat card shared by every specialist; it points to the Orchestrator."""
     children: list[dict[str, Any]] = [
         {"type": "badge", "label": label, "variant": variant}
         for label, variant in (badges or [("Online", "success")])
@@ -293,12 +293,6 @@ def status_card(
     return "custom", {"root": {"type": "section", "title": title, "children": children}}
 
 
-def demo_control_buttons(fault_mode: str) -> list[dict[str, Any]]:
-    if fault_mode == "none":
-        return [_button("Simulate outage", {"action": "simulate_outage"})]
-    return [_button("Restore service", {"action": "restore_service"})]
-
-
 SERVICES_MENU = (
     (
         "rooms",
@@ -315,14 +309,6 @@ SERVICES_MENU = (
         "success",
         "Dorm beds, typical room and board, and meal plans, plus your housing office and "
         "application portal. You apply on your school's site.",
-    ),
-    (
-        "bundle",
-        "Project bundle",
-        "Demo shops",
-        "warning",
-        "Camera, podcast studio, and posters from five demo shops near UCLA, held all at once "
-        "before you pay. Mock Stripe or test FET only. Add a free study room at your school.",
     ),
 )
 
@@ -409,16 +395,8 @@ def _select(
     return field
 
 
-def _hour_label(hour: int) -> str:
-    suffix = "AM" if hour < 12 else "PM"
-    return f"{(hour - 1) % 12 + 1} {suffix}"
-
-
-def _email_field(label: str = "School email", *, required: bool = True) -> dict[str, Any]:
-    field: dict[str, Any] = {"name": "email", "kind": "text", "label": label}
-    if required:
-        field["required"] = True
-    return field
+def _email_field() -> dict[str, Any]:
+    return {"name": "email", "kind": "text", "label": "School email", "required": True}
 
 
 def _day_options(days: list[tuple[str, str]]) -> list[tuple[str, str]]:
@@ -458,74 +436,13 @@ def housing_form() -> tuple[str, dict[str, Any]]:
     }
 
 
-def bundle_form(days: list[tuple[str, str]] | None = None) -> tuple[str, dict[str, Any]]:
-    return "form", {
-        "title": "Demo bundle · UCLA-area demo shops",
-        "fields": [
-            _select(
-                "camera",
-                "Camera",
-                [
-                    ("none", "No camera"),
-                    ("any", "Any camera"),
-                    ("dslr", "DSLR"),
-                    ("mirrorless", "Mirrorless"),
-                ],
-            ),
-            _select(
-                "room",
-                "Room",
-                [
-                    ("none", "No room"),
-                    ("podcast_room", "Podcast studio"),
-                    ("study_room", "Free room at my school"),
-                ],
-            ),
-            {"name": "posters", "kind": "number", "label": "Color posters"},
-            {"name": "microphone", "kind": "checkbox", "label": "USB microphone"},
-            {"name": "tripod", "kind": "checkbox", "label": "Tripod"},
-            _select("day", "Day", _day_options(days or upcoming_days()), required=True),
-            _select(
-                "start_hour",
-                "Start time",
-                [(str(hour), _hour_label(hour)) for hour in range(8, 22)],
-                required=True,
-            ),
-            _select(
-                "hours",
-                "Duration",
-                [(str(h), f"{h} hour{'s' if h > 1 else ''}") for h in range(1, 7)],
-                required=True,
-            ),
-            {"name": "budget", "kind": "number", "label": "Budget (USD)", "required": True},
-            _select("priority", "Priority", list(PRIORITIES.items())),
-            _select("anchor", "Starting point", [(k, v[0]) for k, v in ANCHORS.items()]),
-            {"name": "has_training", "kind": "checkbox", "label": "I have gear training"},
-            _email_field("School email for a room", required=False),
-        ],
-        "submit_cta": {
-            "label": "Find sellers",
-            "selection": {"action": "submit_form", "service": "bundle"},
-        },
-    }
-
-
 def service_form(service: str) -> tuple[str, dict[str, Any]]:
-    if service == "rooms":
-        return rooms_form()
-    if service == "housing":
-        return housing_form()
-    return bundle_form()
+    """The form for one service; anything but housing gets the rooms form, like the chains."""
+    return housing_form() if service == "housing" else rooms_form()
 
 
-def room_link_card(workflow_id: str, school: str, service: str) -> tuple[str, dict[str, Any]]:
+def room_link_card(workflow_id: str, school: str) -> tuple[str, dict[str, Any]]:
     """Ask for the booking link the Researcher could not find, instead of guessing one."""
-    actions: list[tuple[str, dict[str, Any]]] = [
-        ("Check this link", {"action": "submit_link", "workflow_id": workflow_id})
-    ]
-    if service == "bundle":
-        actions.append(("Skip the room", {"action": "skip_room", "workflow_id": workflow_id}))
-    actions.append(("Start over", {"action": "start_over"}))
     return "custom", {
         "root": {
             "type": "section",
@@ -549,52 +466,30 @@ def room_link_card(workflow_id: str, school: str, service: str) -> tuple[str, di
                     "required": True,
                     "placeholder": "https://",
                 },
-                _buttons(actions),
+                _buttons(
+                    [
+                        ("Check this link", {"action": "submit_link", "workflow_id": workflow_id}),
+                        ("Start over", {"action": "start_over"}),
+                    ]
+                ),
             ],
         }
     }
 
 
-EXAMPLE_FIELDS = {
-    "camera": "dslr",
-    "room": "podcast_room",
-    "posters": "20",
-    "start_hour": "15",
-    "hours": "3",
-    "budget": "35",
-    "priority": "cheapest",
-    "anchor": "student_union",
-}
-
-
-def example_bundle_selection(now: datetime | None = None) -> dict[str, Any]:
-    """A complete demo-bundle form submission for next Friday, used by demos and tests."""
-    today = (now or utc_now()).astimezone(CAMPUS_TZ).date()
-    friday = today + timedelta(days=(4 - today.weekday()) % 7 or 7)
-    return {
-        "action": "submit_form",
-        "service": "bundle",
-        **EXAMPLE_FIELDS,
-        "day": friday.isoformat(),
-    }
-
-
 # ---------------------------------------------------------------------------
-# Progress, options, and details
+# Progress, rooms, housing, and bookings
 # ---------------------------------------------------------------------------
 
 
 STAGE_LABELS = {
     "intake": "Reading your form",
     "researcher": "Researching your school",
+    "campus_rooms": "Reading open rooms",
+    "verification": "Verifying every result",
+    "planner": "Ranking open rooms",
+    "recheck": "Re-checking your room",
     "link": "Waiting for a link",
-    "discovery": "Collecting quotes",
-    "verification": "Vetting and re-checking",
-    "analysis": "Checking logistics",
-    "planner": "Ranking options",
-    "holds": "Re-checking and holding",
-    "payment": "Waiting for payment",
-    "booking": "Confirming",
 }
 
 
@@ -606,8 +501,8 @@ def progress_card(
     ]
     if stage in chain:
         done = chain[: chain.index(stage)]
-        steps = [f"✓ {STAGE_LABELS[role]}" for role in done]
-        steps.append(f"• {STAGE_LABELS[stage]}")
+        steps = [f"✓ {STAGE_LABELS.get(role, role.title())}" for role in done]
+        steps.append(f"• {STAGE_LABELS.get(stage, stage.title())}")
         children.append({"type": "text", "value": "\n".join(steps), "style": "body"})
     children.append({"type": "text", "value": f"Workflow {workflow_id[:8]}", "style": "muted"})
     children.append(
@@ -616,53 +511,10 @@ def progress_card(
     return "custom", {"root": {"type": "section", "title": "Agents at work", "children": children}}
 
 
-def _sellers(bundle: dict[str, Any]) -> str:
-    return ", ".join(dict.fromkeys(line["seller_name"] for line in bundle["lines"]))
-
-
-def _walk_text(bundle: dict[str, Any]) -> str:
-    walk = bundle.get("walk_minutes")
-    return f"{walk} min walk" if walk else "no walking route"
-
-
-def bundle_carousel(
-    workflow_id: str, bundles: list[dict[str, Any]], rejected: int
-) -> tuple[str, dict[str, Any]]:
-    items = []
-    for bundle in bundles:
-        priced = sum(1 for line in bundle["lines"] if not line.get("handoff"))
-        badges = [{"label": f"{bundle['seller_count']} vetted sellers", "variant": "success"}]
-        if priced < len(bundle["lines"]):
-            badges.append({"label": "+ free study room", "variant": "info"})
-        if bundle["substitutions"]:
-            badges.append({"label": "Substitution", "variant": "warning"})
-        items.append(
-            {
-                "id": bundle["bundle_id"],
-                "title": bundle["label"],
-                "subtitle": _sellers(bundle),
-                "secondary_text": f"{usd(bundle['total_cents'])} · {_walk_text(bundle)}",
-                "badges": badges,
-                "primary_cta": {
-                    "label": "View bundle",
-                    "selection": {
-                        "action": "view_bundle",
-                        "workflow_id": workflow_id,
-                        "bundle_id": bundle["bundle_id"],
-                    },
-                },
-            }
-        )
-    return "carousel", {
-        "title": "Demo bundles from vetted sellers",
-        "subtitle": f"{rejected} offers were filtered out by vetting and logistics",
-        "items": items,
-    }
-
-
 def rooms_carousel(
     workflow_id: str, options: list[dict[str, Any]], school: str
 ) -> tuple[str, dict[str, Any]]:
+    """One item per planned option; the item ID and the selection carry its stable option_id."""
     items = []
     for index, option in enumerate(options):
         line = option["lines"][0]
@@ -678,7 +530,7 @@ def rooms_carousel(
             badges.insert(0, {"label": "Earliest", "variant": "info"})
         items.append(
             {
-                "id": option["bundle_id"],
+                "id": str(option["option_id"]),
                 "title": str(line["name"]),
                 "subtitle": str(line.get("slot_label") or line.get("location_label") or ""),
                 "secondary_text": f"Free · {seats} · {line.get('location_label') or ''}",
@@ -686,9 +538,9 @@ def rooms_carousel(
                 "primary_cta": {
                     "label": "View room",
                     "selection": {
-                        "action": "view_bundle",
+                        "action": "view_room",
                         "workflow_id": workflow_id,
-                        "bundle_id": option["bundle_id"],
+                        "option_id": str(option["option_id"]),
                     },
                 },
             }
@@ -700,54 +552,8 @@ def rooms_carousel(
     }
 
 
-def _line_row(line: dict[str, Any]) -> dict[str, str]:
-    if line.get("handoff"):
-        when = f" · {line['slot_label']}" if line.get("slot_label") else ""
-        return {
-            "label": f"Study room · {line.get('school_name') or 'your school'}",
-            "value": f"{line['name']}{when}: free, you book it",
-        }
-    return {
-        "label": f"{CATEGORIES[line['category']]} · {line['seller_name']}",
-        "value": f"{line['name']}: {usd(int(line['subtotal_cents']))}",
-    }
-
-
-def bundle_rows(brief: dict[str, Any], bundle: dict[str, Any]) -> list[dict[str, str]]:
-    if brief.get("service") == "rooms":
-        return room_rows(bundle["lines"][0])
-    rows = [_line_row(line) for line in bundle["lines"]]
-    rows.extend(
-        [
-            {"label": "When", "value": describe_window(brief)},
-            {"label": "Booking fee", "value": usd(bundle["fee_cents"])},
-            {"label": "Total", "value": usd(bundle["total_cents"])},
-        ]
-    )
-    if bundle.get("walk_minutes"):
-        rows.append(
-            {"label": "Walk", "value": f"About {bundle['walk_minutes']} minutes between shops"}
-        )
-    if any(line.get("handoff") for line in bundle["lines"]):
-        rows.append(
-            {
-                "label": "Free room",
-                "value": "Not covered by escrow: ResourcePilot re-checks it, you book it",
-            }
-        )
-    if bundle["deposit_cents"]:
-        rows.append(
-            {
-                "label": "Deposits",
-                "value": f"{usd(bundle['deposit_cents'])} refundable, paid to sellers at pickup",
-            }
-        )
-    for note in bundle["substitutions"]:
-        rows.append({"label": "Substitution", "value": note})
-    return rows
-
-
 def room_rows(line: dict[str, Any]) -> list[dict[str, str]]:
+    """Summary rows for one room line; the booking link is a visible row value."""
     rows = [{"label": "Room", "value": str(line["name"])}]
     if line.get("slot_label"):
         rows.append({"label": "When", "value": str(line["slot_label"])})
@@ -755,227 +561,76 @@ def room_rows(line: dict[str, Any]) -> list[dict[str, str]]:
         rows.append({"label": "Seats", "value": str(line["capacity"])})
     if line.get("location_label"):
         rows.append({"label": "Where", "value": str(line["location_label"])})
+    if line.get("school_name"):
+        rows.append({"label": "School", "value": str(line["school_name"])})
     rows.extend(
         [
+            {
+                "label": "Times",
+                "value": f"Live from {line.get('source_label') or 'LibCal'}"
+                if line.get("live_times")
+                else "Not shown live: check times on the booking page",
+            },
             {"label": "Price", "value": "Free"},
             {"label": "Book here", "value": str(line.get("handoff_url") or "")},
-            {
-                "label": "How it works",
-                "value": (
-                    "ResourcePilot re-checks the room live, then you book it on your "
-                    "school's site with your own sign-in. Nothing is reserved for you."
-                ),
-            },
+            {"label": "How it works", "value": str(line.get("policy") or HOW_ROOMS_WORK)},
         ]
     )
     return rows
 
 
-def bundle_detail(
-    workflow_id: str, brief: dict[str, Any], bundle: dict[str, Any], *, checkout: bool
-) -> tuple[str, dict[str, Any]]:
-    ids = {"workflow_id": workflow_id, "bundle_id": bundle["bundle_id"]}
-    rooms = brief.get("service") == "rooms"
-    ctas = []
-    if checkout:
-        ctas.append(
+def room_detail(workflow_id: str, option: dict[str, Any]) -> tuple[str, dict[str, Any]]:
+    """One room before the re-check; the primary CTA asks Campus Rooms to re-check it live."""
+    line = option["lines"][0]
+    ids = {"workflow_id": workflow_id, "option_id": str(option["option_id"])}
+    return "detail", {
+        "title": str(line["name"]),
+        "summary_rows": room_rows(line),
+        "ctas": [
             {
-                "label": "Re-check this room" if rooms else "Hold everything",
+                "label": "Re-check this room",
                 "primary": True,
-                "selection": {"action": "place_holds", **ids},
-            }
-        )
-    ctas.extend(
-        [
-            {
-                "label": "Other rooms" if rooms else "Why not others?",
-                "selection": {"action": "show_status" if rooms else "show_vetting", **ids},
+                "selection": {"action": "recheck_room", **ids},
             },
-            {"label": "Start over", "selection": {"action": "start_over"}},
-        ]
-    )
-    rows = bundle_rows(brief, bundle)
-    if not rooms:
-        rows.extend(
-            {"label": f"Policy · {line['seller_name']}", "value": str(line["policy"])}
-            for line in bundle["lines"]
-        )
-    title = str(bundle["lines"][0]["name"]) if rooms else str(bundle["label"])
-    return "detail", {"title": title, "summary_rows": rows, "ctas": ctas}
+            {
+                "label": "Other rooms",
+                "selection": {"action": "show_results", "workflow_id": workflow_id},
+            },
+        ],
+    }
 
 
-def holds_review_card(
-    workflow_id: str, brief: dict[str, Any], bundle: dict[str, Any], holds_expire_at: str
-) -> tuple[str, dict[str, Any]]:
-    rows = bundle_rows(brief, bundle)
-    if int(bundle["total_cents"]) == 0:
-        rows.append(
-            {
-                "label": "Re-checked",
-                "value": f"Still open as of {_zone_time(utc_now().isoformat(), brief_zone(brief))}",
-            }
-        )
-        return "review", {
-            "title": "Still open",
-            "summary_rows": rows,
-            "approve_cta": {
-                "label": "Get booking link",
-                "primary": True,
-                "selection": {"action": "confirm_free", "workflow_id": workflow_id},
-            },
-            "reject_cta": {
-                "label": "Pick another",
-                "selection": {"action": "release_holds", "workflow_id": workflow_id},
-            },
-        }
+def room_link_receipt(option: dict[str, Any]) -> tuple[str, dict[str, Any]]:
+    """The booking link after a successful re-check. Safe as a terminal card: only CTAs remain."""
+    line = option["lines"][0]
+    rows = [{"label": "Room", "value": str(line["name"])}]
+    if line.get("slot_label"):
+        rows.append({"label": "When", "value": str(line["slot_label"])})
+    if line.get("location_label"):
+        rows.append({"label": "Where", "value": str(line["location_label"])})
     rows.extend(
         [
+            {"label": "Book here", "value": str(line.get("handoff_url") or "")},
+            {"label": "Next step", "value": NOT_RESERVED},
             {
-                "label": "Holds",
-                "value": (
-                    f"All {bundle['seller_count']} sellers are holding your items until "
-                    f"{_zone_time(holds_expire_at)}"
-                ),
+                "label": "Re-checked",
+                "value": "Open when ResourcePilot re-checked it live just now"
+                if line.get("live_times")
+                else "Not checked live: confirm the time on the booking page",
             },
-            {
-                "label": "Payment",
-                "value": (
-                    "No money moves until you pay. Your payment sits in escrow, and sellers "
-                    "are paid only after every booking commits."
-                ),
-            },
+            {"label": "Price", "value": "Free"},
         ]
     )
-    return "review", {
-        "title": "Everything is on hold",
-        "summary_rows": rows,
-        "approve_cta": {
-            "label": "Choose payment",
-            "primary": True,
-            "selection": {"action": "choose_payment", "workflow_id": workflow_id},
-        },
-        "reject_cta": {
-            "label": "Release holds",
-            "selection": {"action": "release_holds", "workflow_id": workflow_id},
-        },
-    }
-
-
-def payment_options_card(
-    workflow_id: str, total_cents: int, fet_amount: str | None
-) -> tuple[str, dict[str, Any]]:
-    children: list[dict[str, Any]] = [
-        {"type": "heading", "value": f"Total {usd(total_cents)}", "level": 2},
-        {
-            "type": "text",
-            "value": "Mock Stripe is a simulation: no Stripe API call and no money moves.",
-            "style": "body",
-        },
-        _button(
-            "Mock Stripe",
-            {"action": "pay", "workflow_id": workflow_id, "payment_method": "stripe_mock"},
-            primary=True,
-        ),
-    ]
-    if fet_amount:
-        children.extend(
-            [
-                {
-                    "type": "text",
-                    "value": (
-                        f"Or pay {fet_amount} faucet-issued test FET on Fetch stable-testnet. "
-                        "The Orchestrator verifies the transaction on chain."
-                    ),
-                    "style": "body",
-                },
-                _button(
-                    "Pay test FET",
-                    {"action": "pay", "workflow_id": workflow_id, "payment_method": "fet_direct"},
-                ),
-            ]
-        )
-    children.append(
-        _button("Release holds", {"action": "release_holds", "workflow_id": workflow_id})
-    )
-    return "custom", {
-        "root": {"type": "section", "title": "Pay ResourcePilot escrow", "children": children}
-    }
-
-
-def receipt_card(
-    brief: dict[str, Any],
-    bundle: dict[str, Any],
-    bookings: list[dict[str, Any]],
-    payment: dict[str, Any],
-    ledger: list[dict[str, Any]],
-) -> tuple[str, dict[str, Any]]:
-    names = {line["seller_id"]: line["seller_name"] for line in bundle["lines"]}
-    lines = {line["seller_id"] + ":" + line["item_id"]: line for line in bundle["lines"]}
-    free = int(bundle["total_cents"]) == 0
-    rows = []
-    for booking in bookings:
-        line = lines.get(f"{booking['seller_id']}:{booking['item_id']}", {})
-        if line.get("handoff"):
-            when = f" · {line['slot_label']}" if line.get("slot_label") else ""
-            rows.append(
-                {
-                    "label": "Book it yourself",
-                    "value": f"{line.get('name', 'Study room')}{when}: {line.get('handoff_url')}",
-                }
-            )
-            continue
-        rows.append(
-            {
-                "label": f"{CATEGORIES.get(line.get('category', ''), 'Item')} · "
-                f"{names.get(booking['seller_id'], booking['seller_id'])}",
-                "value": f"{line.get('name', booking['item_id'])}: {booking['confirmation_code']}",
-            }
-        )
-    if any(line.get("handoff") for line in bundle["lines"]):
-        rows.append(
-            {
-                "label": "Study room",
-                "value": (
-                    "Not reserved by ResourcePilot. Open the link and book with your own "
-                    "sign-in; it was open when we re-checked it."
-                ),
-            }
-        )
-    if free:
-        rows.append({"label": "Paid", "value": "Nothing: study rooms are free"})
-    else:
-        rows.extend(
-            [
-                {"label": "When", "value": describe_window(brief)},
-                {
-                    "label": "Paid",
-                    "value": f"{usd(bundle['total_cents'])} via {rail_label(payment['currency'])}",
-                },
-            ]
-        )
-    for entry in ledger:
-        label = (
-            "Booking fee · ResourcePilot"
-            if entry["kind"] == "fee"
-            else f"{entry['kind'].title()} · {names.get(entry['party'], 'Buyer')}"
-        )
-        rows.append(
-            {
-                "label": label,
-                "value": f"{entry['amount']} {entry['currency']}: {note_for(entry)}",
-            }
-        )
-    if bundle["deposit_cents"]:
-        rows.append(
-            {"label": "Deposits", "value": "Refundable deposits are paid to sellers at pickup"}
-        )
-    priced = len({line["seller_id"] for line in bundle["lines"] if not line.get("handoff")})
     return "detail", {
-        "title": "Your booking link" if free else f"Booked with {priced} sellers",
+        "title": "Your booking link",
         "summary_rows": rows,
         "ctas": [
-            {"label": "My bookings", "primary": True, "selection": {"action": "show_bookings"}},
-            {"label": "New request", "selection": {"action": "start_over"}},
+            {
+                "label": "Find another room",
+                "primary": True,
+                "selection": {"action": "open_service", "service": "rooms"},
+            },
+            {"label": "Menu", "selection": {"action": "start_over"}},
         ],
     }
 
@@ -1020,102 +675,29 @@ def housing_card(state_data: dict[str, Any]) -> tuple[str, dict[str, Any]]:
     }
 
 
-def recovery_card(
-    workflow_id: str, error: str, total_cents: int, refund_due_at: str
-) -> tuple[str, dict[str, Any]]:
-    return "review", {
-        "title": "Booking did not complete",
-        "summary_rows": [
-            {"label": "What happened", "value": error},
-            {"label": "Bookings", "value": "Every seller's booking was cancelled"},
-            {
-                "label": "Your payment",
-                "value": f"{usd(total_cents)} is safe in escrow. No seller was paid.",
-            },
-            {
-                "label": "Auto refund",
-                "value": f"Refunded automatically at {_zone_time(refund_due_at)} if you wait",
-            },
-            {"label": "Retry", "value": "Retrying uses the same payment; you never pay twice"},
-        ],
-        "approve_cta": {
-            "label": "Retry booking",
-            "primary": True,
-            "selection": {"action": "retry_booking", "workflow_id": workflow_id},
-        },
-        "reject_cta": {
-            "label": "Refund me",
-            "selection": {"action": "refund", "workflow_id": workflow_id},
-        },
-    }
-
-
-def refund_card(payment: dict[str, Any], entry: dict[str, Any]) -> tuple[str, dict[str, Any]]:
-    return "detail", {
-        "title": "Refunded",
-        "summary_rows": [
-            {"label": "Amount", "value": f"{entry['amount']} {entry['currency']}"},
-            {"label": "Method", "value": rail_label(str(payment["currency"]))},
-            {"label": "Status", "value": note_for(entry)},
-            {"label": "Sellers", "value": "No seller was paid for this request"},
-        ],
-        "ctas": [{"label": "New request", "primary": True, "selection": {"action": "start_over"}}],
-    }
-
-
-VETTING_STAGES = {
-    "identity": "Identity",
-    "protocol": "Protocol",
-    "track_record": "Track record",
-    "policy": "Policy",
-    "logistics": "Logistics",
-    "availability": "No answer",
-}
-
-
-def vetting_card(workflow_id: str, rejections: list[dict[str, str]]) -> tuple[str, dict[str, Any]]:
-    rows = [
-        {
-            "label": f"{VETTING_STAGES.get(item['stage'], item['stage'])} · {item['seller_name']}",
-            "value": f"{item['item'] + ': ' if item.get('item') else ''}{item['reason']}",
-        }
-        for item in rejections[:20]
-    ] or [{"label": "Vetting", "value": "Every quote passed vetting"}]
-    return "detail", {
-        "title": "What vetting filtered out",
-        "summary_rows": rows,
-        "ctas": [
-            {
-                "label": "Back to options",
-                "primary": True,
-                "selection": {"action": "show_status", "workflow_id": workflow_id},
-            }
-        ],
-    }
-
-
 def _booking_row(booking: dict[str, Any]) -> dict[str, str]:
-    brief, bundle = booking["data"]["brief"], booking["bundle"]
-    if brief.get("service") == "rooms":
-        line = bundle["lines"][0]
-        return {
-            "label": str(line.get("slot_label") or describe_window(brief)),
-            "value": f"{line['name']} · {line.get('school_name') or ''} · free link",
-        }
+    data = booking["data"]
+    brief = dict(data.get("brief") or {})
+    line = booking["option"]["lines"][0]
+    school = (data.get("school") or {}).get("school_name") or line.get("school_name")
+    when = line.get("slot_label") or (describe_window(brief) if brief.get("window_start") else "")
+    name = f"{line['name']} · {school}" if school else str(line["name"])
+    link = line.get("handoff_url")
     return {
-        "label": describe_window(brief),
-        "value": f"{_sellers(bundle)} · {usd(bundle['total_cents'])}",
+        "label": str(when or "Study room"),
+        "value": f"{name}: {link}" if link else name,
     }
 
 
 def bookings_card(bookings: list[dict[str, Any]]) -> tuple[str, dict[str, Any]]:
+    """Recent booked workflow states: each keeps its chosen option and its brief and school."""
     rows = [
         _booking_row(booking)
         for booking in bookings
-        if booking.get("bundle") and booking.get("data", {}).get("brief")
-    ] or [{"label": "Bookings", "value": "No bookings yet"}]
+        if (booking.get("option") or {}).get("lines") and (booking.get("data") or {}).get("brief")
+    ][:10] or [{"label": "Bookings", "value": "No bookings yet"}]
     return "detail", {
-        "title": "Your recent bookings",
+        "title": "Your recent booking links",
         "summary_rows": rows,
         "ctas": [{"label": "New request", "primary": True, "selection": {"action": "start_over"}}],
     }

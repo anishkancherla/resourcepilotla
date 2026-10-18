@@ -1,51 +1,30 @@
-"""Build real seller quotes and briefs for specialist tests."""
+"""Build study-room briefs for specialist and card tests."""
 
 from __future__ import annotations
 
 from datetime import datetime
 from typing import Any
 
-from resourcepilot.cards import example_bundle_selection
 from resourcepilot.clock import CAMPUS_TZ
-from resourcepilot.intake import bundle_brief
-from resourcepilot.protocols import Quote, QuoteRequest
-from resourcepilot.registry import LISTINGS
-from resourcepilot.store import MemoryStore
-from sellers.inventory import build_offers
+from resourcepilot.intake import room_brief
+from resourcepilot.research import room_window
 
+# Wednesday Oct 21 2026, 10 AM campus time.
 NOW = datetime(2026, 10, 21, 10, 0, tzinfo=CAMPUS_TZ)
-# The demo-bundle form as a student submits it: DSLR, podcast room, 20 posters, Fri 3-6 PM, $35.
-EXAMPLE = {
-    key: value
-    for key, value in example_bundle_selection(NOW).items()
-    if key not in {"action", "service"}
+SCHOOL_TIMEZONE = "America/Indiana/Indianapolis"
+# The rooms form as a Purdue student submits it, after the email is reduced to its domain.
+ROOM_FIELDS = {
+    "school_domain": "purdue.edu",
+    "day": "2026-10-22",
+    "window": "afternoon",
+    "duration": "60",
+    "group_size": "2",
 }
 
 
 def brief(fields: dict[str, Any] | None = None, **overrides: Any) -> dict[str, Any]:
-    return {**bundle_brief({**EXAMPLE, **(fields or {})}, now=NOW), **overrides}
-
-
-async def seller_quotes(
-    selected: dict[str, Any], addresses: dict[str, str], store: MemoryStore | None = None
-) -> list[dict[str, Any]]:
-    """Ask every listed seller for a quote exactly as Discovery would record it."""
-    store = store or MemoryStore()
-    request = QuoteRequest(
-        round_id="round-1",
-        workflow_id="wf-1",
-        categories=list(selected["items"]),
-        quantities=dict(selected["items"]),
-        window_start=selected["window_start"],
-        window_end=selected["window_end"],
-    )
-    quotes = []
-    for listing in LISTINGS:
-        if not set(listing.categories) & set(selected["items"]):
-            continue
-        offers = await build_offers(store, listing, request, NOW.isoformat())
-        quote = Quote(
-            round_id="round-1", seller_id=listing.seller_id, hold_ttl_seconds=600, offers=offers
-        )
-        quotes.append({**quote.dict(), "sender": addresses[listing.seller_id]})
-    return quotes
+    """A rooms brief after Intake and the Researcher: Thu Oct 22, 12 PM-5 PM Eastern."""
+    selected = room_brief({**ROOM_FIELDS, **(fields or {})}, now=NOW)
+    start, end = room_window(selected["day"], selected["window"], SCHOOL_TIMEZONE, now=NOW)
+    selected.update(window_start=start, window_end=end, timezone=SCHOOL_TIMEZONE)
+    return {**selected, **overrides}

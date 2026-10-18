@@ -3,8 +3,8 @@
 The Orchestrator owns workflow state. Each specialist receives a correlated TaskRequest, does
 one job, and returns a TaskResult that echoes the correlation fields. A late or duplicate result
 can never advance a newer stage. Each campus service has its own chain of specialists
-(``SERVICE_CHAINS``); the Campus Researcher, Discovery, and the Checkout Coordinator run their
-network work asynchronously in the agent runtime rather than through ``HANDLERS``.
+(``SERVICE_CHAINS``). The Campus Researcher and Campus Rooms read the public web, so they run
+asynchronously in the agent runtime rather than through ``HANDLERS``.
 """
 
 from __future__ import annotations
@@ -14,12 +14,11 @@ from datetime import datetime
 from typing import Any
 from uuid import uuid4
 
-from resourcepilot.bundles import planner_handler
 from resourcepilot.clock import later, parse, utc_now
 from resourcepilot.config import env_int, service_chain
 from resourcepilot.intake import intake_handler
-from resourcepilot.logistics import analysis_handler
 from resourcepilot.models import TaskRequest, TaskResult
+from resourcepilot.planning import planner_handler
 from resourcepilot.store import DurableStore
 from resourcepilot.vetting import verification_handler
 
@@ -64,7 +63,6 @@ def task_result(task: TaskRequest, role: str, *, ok: bool, **fields: Any) -> Tas
 HANDLERS: dict[str, Handler] = {
     "intake": lambda payload, context: intake_handler(payload),
     "verification": verification_handler,
-    "analysis": analysis_handler,
     "planner": planner_handler,
 }
 
@@ -91,7 +89,7 @@ async def begin_workflow(
     request: dict[str, Any],
 ) -> TaskRequest:
     workflow_id = str(uuid4())
-    service = str(request.get("service") or "bundle")
+    service = str(request.get("service") or "rooms")
     task = make_task(
         workflow_id=workflow_id,
         requester=requester,
@@ -135,9 +133,9 @@ async def accept_result(
             result.workflow_id,
             {"status": "failed", "error": result.error or "Specialist failed"},
         )
-    service = str(state.get("service") or "bundle")
+    service = str(state.get("service") or "rooms")
     if result.source_role == "researcher" and result.payload.get("needs_link"):
-        # No booking system was found: pause until the student pastes the link (or skips it).
+        # No booking system was found: pause until the student pastes the link.
         return None, await store.patch_workflow(
             result.workflow_id,
             {"status": "awaiting_link", "stage": "link", "data": result.payload},
@@ -191,6 +189,25 @@ async def advance_to(
         },
     )
     return task, state
+
+
+async def accept_recheck(store: DurableStore, result: TaskResult) -> dict[str, Any] | None:
+    """Accept Campus Rooms' answer to a live re-check once, and only for the active re-check.
+
+    Correlation is checked before the claim, so a forged or misrouted result can never use up
+    the claim that the genuine answer needs.
+    """
+    state = await store.get_workflow(result.workflow_id)
+    if (
+        state is None
+        or state["stage"] != "recheck"
+        or state["expected_request_id"] != result.request_id
+        or result.source_role != "campus_rooms"
+    ):
+        return None
+    if not await store.claim("task_result", result.request_id):
+        return None
+    return state
 
 
 def is_timed_out(state: dict[str, Any], *, now: datetime | None = None) -> bool:

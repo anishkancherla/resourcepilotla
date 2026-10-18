@@ -32,19 +32,6 @@ def unique() -> str:
     return uuid4().hex[:12]
 
 
-@pytest.fixture
-def registry_env(monkeypatch: pytest.MonkeyPatch) -> dict[str, str]:
-    """Give every demo seller a fake registry address, as `make bootstrap` would."""
-    from resourcepilot.config import SELLER_AGENTS
-
-    addresses = {}
-    for seller in SELLER_AGENTS:
-        addresses[seller.key] = f"agent1q{seller.key.replace('_', '')}"
-        monkeypatch.setenv(seller.address_env, addresses[seller.key])
-        monkeypatch.setenv(seller.wallet_env, f"fetch1{seller.key.replace('_', '')}")
-    return addresses
-
-
 @pytest.fixture(scope="session")
 def network_env() -> dict[str, str]:
     from network import build_env

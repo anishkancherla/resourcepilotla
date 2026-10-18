@@ -41,7 +41,8 @@ def test_entrypoint_runs_only_known_agent_modules(monkeypatch) -> None:
     monkeypatch.delenv("AGENT_MODULE", raising=False)
     assert container_entrypoint.agent_module() == "agents.run"
     monkeypatch.setenv("AGENT_MODULE", "sellers.run")
-    assert container_entrypoint.agent_module() == "sellers.run"
+    with pytest.raises(SystemExit, match="AGENT_MODULE must be one of"):
+        container_entrypoint.agent_module()
     monkeypatch.setenv("AGENT_MODULE", "os")
     with pytest.raises(SystemExit, match="AGENT_MODULE must be one of"):
         container_entrypoint.agent_module()

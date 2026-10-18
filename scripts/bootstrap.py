@@ -20,9 +20,9 @@ ENV_FILE = ROOT / ".env"
 MANIFEST = ROOT / ".profiles.json"
 
 
-def derive_identity(name: str, seed: str) -> tuple[str, str]:
+def derive_address(name: str, seed: str) -> str:
     probe = Agent(name=f"bootstrap-{name}", seed=seed)
-    return str(probe.address), str(probe.wallet.address())
+    return str(probe.address)
 
 
 def replace_value(lines: list[str], key: str, value: str) -> None:
@@ -39,13 +39,10 @@ def confirm(question: str) -> bool:
 
 
 def assign(lines: list[str], identity: AgentIdentity) -> None:
-    """Give one agent a fresh private seed and the address and wallet derived from it."""
+    """Give one agent a fresh private seed and the address derived from it."""
     seed = secrets.token_urlsafe(48)
-    address, wallet = derive_identity(identity.key, seed)
     replace_value(lines, identity.seed_env, seed)
-    replace_value(lines, identity.address_env, address)
-    if identity.kind == "seller":
-        replace_value(lines, identity.wallet_env, wallet)
+    replace_value(lines, identity.address_env, derive_address(identity.key, seed))
 
 
 def profile(identity: AgentIdentity, address: str, port: int) -> dict[str, Any]:
@@ -55,7 +52,6 @@ def profile(identity: AgentIdentity, address: str, port: int) -> dict[str, Any]:
     )
     return {
         "key": identity.key,
-        "kind": identity.kind,
         "name": identity.name,
         "address": address,
         "port": port,
@@ -72,7 +68,7 @@ def add_missing() -> list[AgentIdentity] | None:
     """Append identities for agents added since .env was made. Existing seeds never change."""
     missing = missing_identities(dotenv_values(ENV_FILE))
     if not missing:
-        print("Every agent already has an identity. Nothing was changed.")
+        print("Every agent already has an identity. .env was not changed.")
         return []
     names = ", ".join(identity.name for identity in missing)
     if not confirm(f"Add identities for {len(missing)} new agents ({names})? Others stay as is."):
@@ -107,7 +103,8 @@ def main() -> int:
         added = add_missing()
         if added is None:
             return 0
-        print(f"\nAdded {len(added)} identities (seeds are not displayed).")
+        if added:
+            print(f"\nAdded {len(added)} identities (seeds are not displayed).")
     else:
         if ENV_FILE.exists() and not args.force:
             if missing_identities(dotenv_values(ENV_FILE)):

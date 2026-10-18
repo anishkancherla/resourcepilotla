@@ -1,62 +1,57 @@
 # Trust model
 
-Why can an Orchestrator send your money toward a seller it did not build? Because identity, conduct,
-and money are each checked in a different place.
+Why can the Orchestrator send a student to a room-booking link or a housing portal it did not
+build? Because every link it shows was found on the school's own site, checked by a separate
+agent before the student sees it, and, for a room, read again live right before it is handed
+over. ResourcePilot takes no payments, so there is no money to protect: what it protects is the
+student's trust in the link and the privacy of their email address.
 
-## 1. Where sellers come from
+## 1. Where rooms and links come from
 
-**Curated registry.** [resourcepilot/registry.py](../resourcepilot/registry.py) lists each seller's
-ID, display name, categories, location, opening hours, and identity status. The registry stores a
-seller's agent address and payout wallet as environment variables derived from the seller's seed.
-The registry is the only place a seller's identity is asserted.
+- **The school.** The Campus Researcher starts from the domain of the student's email, matches it
+  to a US institution in IPEDS, and finds the booking system and housing pages on the school's own
+  site or its known vendor. If it finds no booking system, it asks the student for the link and
+  checks the pasted link with the same rules. It never guesses.
+- **The live room system.** Campus Rooms reads open rooms from the school's public LibCal pages.
+  For other systems it offers only the school's booking page, because their availability is not
+  public. It never invents rooms, and when LibCal's live times fail it falls back to that link.
 
-**Optional open discovery.** With `ALMANAC_DISCOVERY=true`, Seller Discovery also calls
-`ctx.get_agents_by_protocol` with the `ResourceHold` seller digest. It then asks up to five
-unlisted agents for quotes. Their quotes reach Verification so the rejection is visible, but an
-unlisted seller can never pass the identity check. Discovering a seller is not the same as trusting
-it.
+## 2. Verification of room offers
 
-## 2. Four vetting layers
+Verification checks every room offer from Campus Rooms before the Planner ranks it. An offer is
+rejected, with the reason kept alongside the workflow, unless all of these hold:
 
-Seller Verification runs these checks on every quote, in order. A rejection names the layer and the
-reason, and the **Why not others?** card shows them.
+1. **Complete.** The offer has a room name and a stable room ID.
+2. **Available.** The offer is not marked unavailable. When no room fits, Campus Rooms returns an
+   unavailable offer with the reason ("No room for 4 at … is open for 60 minutes in that window"),
+   and Verification passes that reason on.
+3. **Safe link.** The booking link is https on the school's domain or one of its subdomains, or
+   on a known booking vendor.
+4. **In your window.** When the offer has live times, its slot starts and ends inside the window
+   the student asked for.
+5. **Fits the group.** When the room's seat count is known, it is at least the group size.
 
-1. **Identity.** The quote must arrive from the exact registry address of a listing marked
-   identity-verified. Quotes are keyed by the authenticated sender address, so a seller cannot
-   claim another seller's ID.
-2. **Protocol conformance.** These must all hold:
-   - Protocol version 1.1.0 and currency USD.
-   - A hold time of at least 120 seconds.
-   - Offers only in the seller's listed categories.
-   - `subtotal = unit price × quantity × hours`, within one cent.
-3. **Track record.** Memory and Audit counts each seller's quotes, silences, held and failed holds,
-   and committed and failed bookings. A seller with at least three attempts and a failure rate above
-   50% is dropped. A seller with fewer than three committed bookings is "new", and any single line
-   it offers above `NEW_SELLER_CAP_CENTS` is rejected.
-4. **Policy.** The item must be available for the requested window and quantity. Items that require
-   training are dropped unless you said you have it. A Campus Rooms offer must be a $0 handoff line,
-   and its booking link must be https on your school's domain or a known booking vendor. A handoff
-   offer from any other seller is rejected.
+If no offer passes, the workflow fails with the first rejection's reason, or "No open room is left
+at your school for that time". The student sees an error card, never an unchecked room.
 
-After vetting, Logistics Analysis drops offers that cannot be ready in time. The Bundle Planner
-never builds a bundle over your budget.
+## 3. The live re-check before the link
 
-## 3. Conduct at checkout
+A carousel can be minutes old. When the student presses **Re-check this room**, the Orchestrator
+asks Campus Rooms to read LibCal's availability for that exact slot again, uncached. Only if the
+slot is still open does the student get the booking link. If it was taken, the Planner drops just
+that room and shows the other open rooms. A booking-page offer has no live times, so it is handed
+over as a link, and the card says it was not checked live.
 
-Vetting judges what a seller promised. Checkout judges what the seller does:
+ResourcePilot never reserves a room. The booking link card says so plainly: the student books on
+the school's site with their own sign-in.
 
-- A hold confirmed at a different price than quoted is treated as a rejection.
-- Holds and commits are sent only to registry addresses. Replies from any other sender are ignored.
-- One failing seller releases everyone's holds, and the Planner reroutes around that seller.
+## 4. Housing link re-checks
 
-## 4. Money stays with the platform until the end
-
-Buyers pay the Orchestrator's escrow, never a seller. Sellers are paid their quoted subtotal only
-after every booking in the bundle commits. A seller that misbehaves at the last step gets nothing,
-and the buyer can retry or take a refund.
-
-Campus Rooms is never paid and never takes part in escrow. Its lines are free, and the `free:`
-commit reference is accepted only when every hold in the round is a $0 Campus Rooms hold.
+For housing, the Researcher finds the housing office page and an application portal that is a link
+on the office's own pages or on its housing vendor (StarRez). Verification then re-opens the office
+and portal links itself, under the same fetch rules, and drops any that no longer open. The housing
+card names any link it dropped. ResourcePilot never applies for, reserves, or pays for
+housing.
 
 ## 5. Reading the public web safely
 
@@ -86,15 +81,23 @@ and [resourcepilot/http.py](../resourcepilot/http.py):
 A pasted booking link goes through the same checks, so a student cannot use ResourcePilot to fetch
 an arbitrary URL.
 
+## 6. Messages between agents
+
+- Specialists accept tasks only from the Orchestrator's address, and refuse a task past its
+  deadline.
+- The Orchestrator accepts a result only from the address of the role it claims to come from, only
+  once, and only for the request the workflow currently expects.
+- Memory and Audit accepts audit events only from ResourcePilot's own agents.
+- Card selections carry stable workflow and option IDs. A re-check is never started from
+  ambiguous prose.
+
 ## Limits of this demo
 
-- The five demo sellers are demo businesses. Their "verified" flags are demo onboarding markers,
-  not the result of a real business-identity check.
-- Campus Rooms is "verified" because it runs from this repository. The rooms are real, but
-  ResourcePilot cannot see a school's booking rules (who may book, limits per day), so the student
-  books on the school's site.
+- ResourcePilot cannot see a school's booking rules (who may book, limits per day), so the student
+  books on the school's site, which applies them.
+- LibCal's availability endpoint is the one its public booking page calls. It is not a documented
+  API and may change.
 - The crawl recognizes common systems and booking words. A school whose library hides its booking
   system behind a sign-in or JavaScript-only navigation gets the paste-link card.
-- A production registry would add domain or business verification, signed listings, dispute
-  handling, and payout holds for new sellers.
-- Almanac discovery is off by default and has been tested only against a simulated Almanac.
+- IPEDS facts are the 2022 survey year. Prices and capacity change, so check current figures with
+  the school.

@@ -1,4 +1,4 @@
-.PHONY: setup bootstrap bootstrap-missing start stop logs profiles verify test lint typecheck check build stripe-mock
+.PHONY: setup bootstrap bootstrap-missing start stop logs profiles verify test lint typecheck check build
 
 setup:
 	uv sync
@@ -13,7 +13,7 @@ bootstrap-missing:
 
 start:
 	docker compose up --build -d
-	@echo "15 agents are starting. Run 'make profiles', open every Inspector URL, and connect Mailbox."
+	@echo "7 agents are starting. Run 'make profiles', open every Inspector URL, and connect Mailbox."
 
 stop:
 	docker compose down
@@ -36,14 +36,9 @@ lint:
 	uv run ruff check .
 
 typecheck:
-	uv run mypy agents resourcepilot sellers scripts
+	uv run mypy agents resourcepilot scripts
 
 check: lint typecheck test
 
 build:
 	docker build -t resourcepilot-la .
-
-# Drive one full Mock Stripe checkout against the running Orchestrator. No money moves.
-stripe-mock:
-	@echo "WARNING: STRIPE_MOCK makes no Stripe API call and moves no money."
-	uv run python scripts/demo_payment_buyer.py

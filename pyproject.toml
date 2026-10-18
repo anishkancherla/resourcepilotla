@@ -5,13 +5,12 @@ build-backend = "hatchling.build"
 [project]
 name = "resourcepilot-la"
 version = "0.1.0"
-description = "Multi-seller, hold-then-pay campus resource checkout on Fetch.ai uAgents"
+description = "Live campus study rooms and housing facts for any school, on Fetch.ai uAgents"
 readme = "README.md"
 requires-python = ">=3.11,<3.14"
 license = { text = "MIT" }
 dependencies = [
   "asyncpg>=0.30.0,<1",
-  "cosmpy>=0.9.2,<1",
   "httpx>=0.28.1,<1",
   "python-dotenv>=1.1.0,<2",
   "uagents>=0.25.2,<0.26",
@@ -26,7 +25,7 @@ dev = [
 ]
 
 [tool.hatch.build.targets.wheel]
-packages = ["agents", "resourcepilot", "sellers"]
+packages = ["agents", "resourcepilot"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

@@ -11,7 +11,8 @@ typical room and board, and meal plans.
 
 Every fetch is https only. It is limited to the school's domain or a known booking vendor, refused
 for private addresses, re-checked on each redirect, and capped by a small fetch and time budget.
-Page content is treated as untrusted evidence.
+Page content is treated as untrusted evidence, never as instructions. It never reads room
+availability, never books anything, and never guesses a booking system.
 
 Its profile chat shows its role and points to the ResourcePilot Orchestrator.
 

@@ -1,152 +1,118 @@
 from __future__ import annotations
 
-from datetime import timedelta
+from typing import Any
 
 import pytest
-from helpers import NOW, brief, seller_quotes
+from provider_fakes import campus
 
-from resourcepilot.clock import parse
-from resourcepilot.logistics import analysis_handler, walk_minutes
-from resourcepilot.store import SELLER_COUNTERS
-from resourcepilot.vetting import track_record_problem, verification_handler, vet_quotes
+from resourcepilot.rooms import PAGE_ITEM
+from resourcepilot.vetting import verification_handler, vet_room_offers
 
-
-def reasons(result: dict, seller_id: str) -> list[str]:
-    return [r["reason"] for r in result["rejections"] if r["seller_id"] == seller_id]
-
-
-def record(**counts: int) -> dict[str, int]:
-    return {**dict.fromkeys(SELLER_COUNTERS, 0), **counts}
+START = "2026-10-19T12:00:00-04:00"
+END = "2026-10-19T17:00:00-04:00"
+BRIEF = {"service": "rooms", "group_size": 3, "window_start": START, "window_end": END}
+CAMPUS = campus()
 
 
-async def test_unverified_seller_and_untrained_dslr_are_rejected(registry_env) -> None:
-    selected = brief()
-    result = verification_handler(
-        {"brief": selected, "quotes": await seller_quotes(selected, registry_env)}, {}
+def room(**fields: Any) -> dict[str, Any]:
+    return {
+        "item_id": "libcal-9-7-101",
+        "name": "HSSE 2101",
+        "capacity": 6,
+        "slot_start": "2026-10-19T13:00:00-04:00",
+        "slot_end": "2026-10-19T14:00:00-04:00",
+        "slot_label": "Mon Oct 19 \u00b7 1:00pm\u20132:00pm",
+        "location_label": "HSSE Library",
+        "handoff_url": "https://calendar.lib.purdue.edu/space/101",
+        "live_times": True,
+        "source_label": "LibCal",
+        "school_name": "Purdue University-Main Campus",
+        "available": True,
+        "unavailable_reason": "",
+        "policy": "Free.",
+        **fields,
+    }
+
+
+def page(**fields: Any) -> dict[str, Any]:
+    return room(
+        item_id=PAGE_ITEM,
+        name="Book on Purdue's LibCal",
+        capacity=0,
+        slot_start="",
+        slot_end="",
+        slot_label="",
+        handoff_url="https://calendar.lib.purdue.edu/allspaces",
+        live_times=False,
+        **fields,
     )
-    assert reasons(result, "flash_prints") == ["Identity not verified"]
-    assert "Requires gear-share training" in reasons(result, "gear_share")
-    kept = {(offer["seller_id"], offer["item_id"]) for offer in result["offers"]}
-    assert ("gear_share", "dslr_kit") not in kept
-    assert ("gear_share", "mirrorless_kit") in kept
-    assert {("westwood_print", "poster_color_18x24"), ("gayley_copy", "poster_color_18x24")} <= kept
-    assert ("studio_rooms", "podcast_studio") in kept
-    mirrorless = next(o for o in result["offers"] if o["item_id"] == "mirrorless_kit")
-    assert mirrorless["exact_match"] is False
-    assert result["uncovered"] == []
 
 
-async def test_trained_buyer_keeps_the_exact_dslr_match(registry_env) -> None:
-    selected = brief(has_training=True)
-    result = verification_handler(
-        {"brief": selected, "quotes": await seller_quotes(selected, registry_env)}, {}
-    )
-    dslr = next(o for o in result["offers"] if o["item_id"] == "dslr_kit")
-    assert dslr["exact_match"] is True
-
-
-async def test_impersonation_and_unlisted_agents_fail_identity(registry_env) -> None:
-    selected = brief()
-    quotes = await seller_quotes(selected, registry_env)
-    westwood = next(q for q in quotes if q["seller_id"] == "westwood_print")
-    impostor = {**westwood, "sender": "agent1qimpostor"}
-    rogue = {**westwood, "seller_id": "cheap_rogue", "sender": "agent1qrogue"}
-    offers, rejections, summary = vet_quotes(selected, [impostor, rogue], {})
-    assert offers == []
-    assert [r["stage"] for r in rejections] == ["identity", "identity"]
-    assert {item["status"] for item in summary} == {"rejected"}
+def test_trusted_offers_pass_through_unchanged() -> None:
+    offers = [room(), page(), room(capacity=0, item_id="libcal-9-7-102", name="Unlisted")]
+    vendor = room(item_id="libcal-1-1-1", handoff_url="https://purdue.libcal.com/space/1")
+    accepted, rejections = vet_room_offers(BRIEF, [*offers, vendor], CAMPUS)
+    assert accepted == [*offers, vendor]
+    assert rejections == []
+    edges = room(slot_start=START, slot_end=END)
+    assert vet_room_offers(BRIEF, [edges], CAMPUS) == ([edges], [])
 
 
 @pytest.mark.parametrize(
     ("tamper", "reason"),
     [
-        ({"protocol_version": "0.9.0"}, "ResourceHold 0.9.0"),
-        ({"hold_ttl_seconds": 30}, "Hold window too short"),
-        ({"currency": "EUR"}, "unsupported currency"),
+        ({"available": False, "unavailable_reason": "No room for 3 is open"}, "No room for 3"),
+        ({"available": False, "unavailable_reason": ""}, "Not available"),
+        ({"name": ""}, "missing a room name or id"),
+        ({"item_id": ""}, "missing a room name or id"),
+        ({"handoff_url": "https://evil.example.com/space/101"}, "not on the school's site"),
+        ({"handoff_url": "http://calendar.lib.purdue.edu/space/101"}, "not on the school's site"),
+        ({"handoff_url": ""}, "not on the school's site"),
+        ({"slot_start": "2026-10-19T11:30:00-04:00"}, "outside the window"),
+        ({"slot_end": "2026-10-19T17:30:00-04:00"}, "outside the window"),
+        ({"slot_start": "2026-10-19T14:00:00-04:00"}, "outside the window"),
+        ({"slot_start": "", "slot_end": ""}, "outside the window"),
+        ({"capacity": 2}, "Seats 2, fewer than your group of 3"),
     ],
 )
-async def test_protocol_conformance(registry_env, tamper: dict, reason: str) -> None:
-    selected = brief()
-    quotes = [
-        {**q, **tamper} if q["seller_id"] == "studio_rooms" else q
-        for q in await seller_quotes(selected, registry_env)
+def test_each_rejection_reason(tamper: dict[str, Any], reason: str) -> None:
+    bad = room(**tamper)
+    accepted, rejections = vet_room_offers(BRIEF, [bad, page()], CAMPUS)
+    assert accepted == [page()]
+    assert len(rejections) == 1
+    assert set(rejections[0]) == {"item", "reason"}
+    assert reason in rejections[0]["reason"]
+    assert rejections[0]["item"] == (bad["name"] or bad["item_id"])
+
+
+def test_links_are_checked_against_the_school_domain() -> None:
+    elsewhere = campus(domain="mit.edu")
+    _, rejections = vet_room_offers(BRIEF, [room()], elsewhere)
+    assert [r["reason"] for r in rejections] == [
+        "Booking link is not on the school's site or a known booking system"
     ]
-    result = verification_handler({"brief": selected, "quotes": quotes}, {})
-    assert any(reason in item for item in reasons(result, "studio_rooms"))
-    assert "podcast_room" in result["uncovered"]
 
 
-async def test_tampered_quote_arithmetic_is_rejected(registry_env) -> None:
-    selected = brief()
-    quotes = await seller_quotes(selected, registry_env)
-    for quote in quotes:
-        if quote["seller_id"] == "westwood_print":
-            quote["offers"][0]["subtotal_cents"] = 1
-    result = verification_handler({"brief": selected, "quotes": quotes}, {})
-    assert "Quote arithmetic does not add up" in reasons(result, "westwood_print")
+def test_handler_keeps_the_payload_and_reports_rejections() -> None:
+    payload = {
+        "brief": BRIEF,
+        "campus": CAMPUS,
+        "school": {"domain": "purdue.edu"},
+        "offers": [room(), room(name="Tiny", capacity=1)],
+    }
+    result = verification_handler(payload, {})
+    assert result["school"] == payload["school"]
+    assert result["campus"] == CAMPUS
+    assert result["offers"] == [room()]
+    assert result["rejections"] == [
+        {"item": "Tiny", "reason": "Seats 1, fewer than your group of 3"}
+    ]
 
 
-async def test_failing_track_record_excludes_a_seller(registry_env) -> None:
-    selected = brief()
-    result = verification_handler(
-        {"brief": selected, "quotes": await seller_quotes(selected, registry_env)},
-        {"seller_records": {"westwood_print": record(holds_failed=3, holds_confirmed=1)}},
-    )
-    assert reasons(result, "westwood_print") == ["Track record: 3 of 4 recent requests failed"]
-    assert any(offer["seller_id"] == "gayley_copy" for offer in result["offers"])
-
-
-def test_track_record_needs_enough_attempts() -> None:
-    assert track_record_problem(record(holds_failed=2)) is None
-    assert track_record_problem(record(holds_failed=2, no_responses=1)) is not None
-    assert track_record_problem(record(holds_failed=1, holds_confirmed=5)) is None
-
-
-async def test_new_seller_spending_cap(registry_env, monkeypatch) -> None:
-    monkeypatch.setenv("NEW_SELLER_CAP_CENTS", "1150")
-    selected = brief()
-    quotes = await seller_quotes(selected, registry_env)
-    capped = verification_handler({"brief": selected, "quotes": quotes}, {})
-    assert any("New seller cap" in item for item in reasons(capped, "studio_rooms"))
-    trusted = verification_handler(
-        {"brief": selected, "quotes": quotes},
-        {"seller_records": {"studio_rooms": record(bookings_committed=5)}},
-    )
-    assert any(offer["seller_id"] == "studio_rooms" for offer in trusted["offers"])
-
-
-async def test_silent_sellers_and_empty_results(registry_env) -> None:
-    selected = brief()
-    result = verification_handler(
-        {
-            "brief": selected,
-            "quotes": await seller_quotes(selected, registry_env),
-            "no_response": ["gayley_copy"],
-        },
-        {},
-    )
-    assert reasons(result, "gayley_copy") == ["Did not answer in time"]
-    with pytest.raises(ValueError, match="No trustworthy seller"):
-        verification_handler({"brief": selected, "quotes": []}, {})
-
-
-async def test_analysis_enforces_lead_time_and_adds_walks(registry_env) -> None:
-    selected = brief()
-    vetted = verification_handler(
-        {"brief": selected, "quotes": await seller_quotes(selected, registry_env)}, {}
-    )
-    one_hour_before = parse(selected["window_start"]) - timedelta(hours=1)
-    result = analysis_handler(vetted, {"now": one_hour_before.isoformat()})
-    sellers = {offer["seller_id"] for offer in result["offers"]}
-    assert "westwood_print" not in sellers
-    assert "gayley_copy" in sellers
-    assert any("lead time" in r["reason"] for r in result["rejections"])
-    assert all(offer["walk_minutes"] >= 1 for offer in result["offers"])
-    early = analysis_handler(vetted, {"now": NOW.isoformat()})
-    assert "westwood_print" in {offer["seller_id"] for offer in early["offers"]}
-
-
-def test_walk_estimate_is_monotonic() -> None:
-    near = walk_minutes(34.0705, -118.4445, 34.0700, -118.4430)
-    far = walk_minutes(34.0705, -118.4445, 34.0617, -118.4469)
-    assert 1 <= near < far
+def test_handler_raises_the_first_reason_when_nothing_is_left() -> None:
+    unavailable = page(available=False, unavailable_reason="No room for 3 at Purdue is open")
+    payload = {"brief": BRIEF, "campus": CAMPUS, "offers": [unavailable, room(capacity=1)]}
+    with pytest.raises(ValueError, match="No room for 3 at Purdue is open"):
+        verification_handler(payload, {})
+    with pytest.raises(ValueError, match="No open room is left at your school for that time"):
+        verification_handler({"brief": BRIEF, "campus": CAMPUS, "offers": []}, {})

@@ -40,16 +40,3 @@ class HealthResponse(Model):
     status: str
     role: str
     address: str
-
-
-class PaymentRecord(Model):
-    reference: str
-    workflow_id: str
-    requester: str
-    amount: str
-    currency: str
-    recipient: str
-    network: str
-    status: str
-    transaction_id: str | None = None
-    buyer_wallet: str | None = None

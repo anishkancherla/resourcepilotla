@@ -9,7 +9,6 @@ RUN addgroup --system app && adduser --system --ingroup app app
 COPY pyproject.toml README.md LICENSE ./
 COPY resourcepilot resourcepilot
 COPY agents agents
-COPY sellers sellers
 RUN pip install --no-cache-dir .
 
 USER app

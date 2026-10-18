@@ -2,9 +2,7 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
-from typing import Final, Literal
-
-AgentKind = Literal["platform", "seller"]
+from typing import Final
 
 
 @dataclass(frozen=True)
@@ -15,7 +13,6 @@ class AgentIdentity:
     name: str
     responsibility: str
     port: int
-    kind: AgentKind = "platform"
 
     @property
     def env_prefix(self) -> str:
@@ -34,16 +31,12 @@ class AgentIdentity:
         return f"{self.env_prefix}_PORT"
 
     @property
-    def wallet_env(self) -> str:
-        return f"{self.env_prefix}_WALLET"
-
-    @property
     def compose_service(self) -> str:
         return self.key.replace("_", "-")
 
     @property
     def readme_dir(self) -> str:
-        return f"{'agents' if self.kind == 'platform' else 'sellers'}/{self.key}"
+        return f"agents/{self.key}"
 
     def configured_port(self) -> int:
         return int(os.getenv(self.port_env, str(self.port)))
@@ -55,11 +48,13 @@ class AgentIdentity:
         return value
 
 
+# Seven real uAgents, each its own process run by agents/run.py with AGENT_ROLE=<key>.
+# Seeds and addresses are keyed by `key`, so identities in an existing .env stay valid.
 PLATFORM_ROLES: Final[tuple[AgentIdentity, ...]] = (
     AgentIdentity(
         "orchestrator",
         "ResourcePilot Orchestrator",
-        "Runs the ASI:One chat, the workflow, and escrow payment",
+        "Runs the ASI:One chat, the services menu, cards, and the workflow",
         8000,
     ),
     AgentIdentity(
@@ -69,115 +64,52 @@ PLATFORM_ROLES: Final[tuple[AgentIdentity, ...]] = (
         8001,
     ),
     AgentIdentity(
-        "discovery",
-        "ResourcePilot Seller Discovery",
-        "Finds seller agents, including Campus Rooms, and collects quotes from them",
+        "researcher",
+        "ResourcePilot Campus Researcher",
+        "Finds a school's room-booking system and housing pages from its email domain",
         8002,
     ),
     AgentIdentity(
-        "verification",
-        "ResourcePilot Seller Verification",
-        "Vets sellers four ways and re-checks official housing links live",
+        "campus_rooms",
+        "ResourcePilot Campus Rooms",
+        "Reads open library rooms live and re-checks one before handing over the booking link",
         8003,
     ),
     AgentIdentity(
-        "analysis",
-        "ResourcePilot Logistics Analysis",
-        "Checks time windows, lead times, and walking distance",
+        "verification",
+        "ResourcePilot Verification",
+        "Checks every room offer and re-opens official housing links before you see them",
         8004,
     ),
     AgentIdentity(
         "planner",
-        "ResourcePilot Bundle Planner",
-        "Builds budget-safe bundles and ranks live room options",
+        "ResourcePilot Planner",
+        "Ranks open rooms and reroutes when a room is taken",
         8005,
-    ),
-    AgentIdentity(
-        "fulfillment",
-        "ResourcePilot Checkout Coordinator",
-        "Places holds and commits bookings all-or-nothing",
-        8006,
     ),
     AgentIdentity(
         "memory_audit",
         "ResourcePilot Memory and Audit",
-        "Keeps the audit timeline, preferences, and seller track records",
-        8007,
-    ),
-    AgentIdentity(
-        "researcher",
-        "ResourcePilot Campus Researcher",
-        "Finds a school's room-booking system and housing pages from its email domain",
-        8008,
+        "Keeps the append-only audit timeline and your recent bookings",
+        8006,
     ),
 )
 
-SELLER_AGENTS: Final[tuple[AgentIdentity, ...]] = (
-    AgentIdentity(
-        "westwood_print",
-        "Westwood Print Lab (demo seller)",
-        "Sells same-day poster printing",
-        8100,
-        "seller",
-    ),
-    AgentIdentity(
-        "gayley_copy",
-        "Gayley Copy Center (demo seller)",
-        "Sells poster printing with longer hours",
-        8101,
-        "seller",
-    ),
-    AgentIdentity(
-        "flash_prints",
-        "Flash Prints 4U (demo seller, unverified)",
-        "Sells very cheap printing without a verified identity",
-        8102,
-        "seller",
-    ),
-    AgentIdentity(
-        "gear_share",
-        "Campus Gear Share (demo seller)",
-        "Rents cameras, microphones, and tripods by the hour",
-        8103,
-        "seller",
-    ),
-    AgentIdentity(
-        "studio_rooms",
-        "Hilltop Studio Rooms (demo seller)",
-        "Rents podcast studios by the hour",
-        8104,
-        "seller",
-    ),
-    AgentIdentity(
-        "campus_rooms",
-        "Campus Rooms (live library rooms)",
-        "Quotes real open library study rooms at any school as free booking handoffs",
-        8105,
-        "seller",
-    ),
-)
-
-ALL_AGENTS: Final = PLATFORM_ROLES + SELLER_AGENTS
+ALL_AGENTS: Final = PLATFORM_ROLES
 ROLE_BY_KEY: Final = {role.key: role for role in PLATFORM_ROLES}
-SELLER_BY_KEY: Final = {seller.key: seller for seller in SELLER_AGENTS}
 
-# The sequential pipelines, one per campus service. Discovery fans out to sellers inside its own
-# step. A project bundle visits the Campus Researcher only when the student adds a school email.
-SERVICES: Final = ("rooms", "housing", "bundle")
+# The sequential pipelines, one per campus service.
+SERVICES: Final = ("rooms", "housing")
 SERVICE_CHAINS: Final[dict[str, tuple[str, ...]]] = {
-    "rooms": ("intake", "researcher", "discovery", "verification", "analysis", "planner"),
+    "rooms": ("intake", "researcher", "campus_rooms", "verification", "planner"),
     "housing": ("intake", "researcher", "verification"),
-    "bundle": ("intake", "researcher", "discovery", "verification", "analysis", "planner"),
 }
 SPECIALISTS: Final = frozenset(role for chain in SERVICE_CHAINS.values() for role in chain)
 
 
 def service_chain(service: str, payload: dict[str, object] | None = None) -> tuple[str, ...]:
-    chain = SERVICE_CHAINS.get(service, SERVICE_CHAINS["bundle"])
-    brief = (payload or {}).get("brief")
-    if service == "bundle" and not (isinstance(brief, dict) and brief.get("school_domain")):
-        return tuple(role for role in chain if role != "researcher")
-    return chain
+    """Return the specialists a service visits, in order. Unknown services get the rooms chain."""
+    return SERVICE_CHAINS.get(service, SERVICE_CHAINS["rooms"])
 
 
 def _normalize(raw: str) -> str:
@@ -190,14 +122,6 @@ def get_role(key: str | None = None) -> AgentIdentity:
         return ROLE_BY_KEY[selected]
     except KeyError as exc:
         raise RuntimeError(f"AGENT_ROLE must be one of: {', '.join(ROLE_BY_KEY)}") from exc
-
-
-def get_seller(key: str | None = None) -> AgentIdentity:
-    selected = _normalize(key if key is not None else (os.getenv("SELLER_ID") or ""))
-    try:
-        return SELLER_BY_KEY[selected]
-    except KeyError as exc:
-        raise RuntimeError(f"SELLER_ID must be one of: {', '.join(SELLER_BY_KEY)}") from exc
 
 
 def agent_addresses(*, require_all: bool = True) -> dict[str, str]:

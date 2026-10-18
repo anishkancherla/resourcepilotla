@@ -1,15 +1,14 @@
 # ResourcePilot LA
 
-Campus help for a student's first weeks, run by a team of uAgents in one ASI:One conversation.
-It works like Fetch's Welcome Week agents: a services menu of buttons and short forms, with a
-card for every reply.
+Campus help for a student's first weeks, at any US school, run by a team of seven uAgents in one
+ASI:One conversation. It works like Fetch's Welcome Week agents: a services menu of buttons and
+short forms, with a card for every reply.
 
 | Service | What you get | Source |
 | --- | --- | --- |
-| **Study rooms** | Real open library study rooms at your school, re-checked live before you book | Live: your school's LibCal, found by the Campus Researcher |
-| **Campus housing** | Dorm beds, typical room and board, meal plans, your housing office, and its application portal | Live: IPEDS plus the school's own housing site |
-| **Project bundle** | Camera, podcast studio, and posters from several sellers, held all at once before you pay | Demo shops near UCLA (Mock Stripe or test FET only) |
-| **My bookings** | Your recent bookings and room links | ResourcePilot's audit trail |
+| **Study rooms** | Real open library study rooms at your school, re-checked live, then a free booking link. You book with your own sign-in. | Live: your school's LibCal, found by the Campus Researcher |
+| **Campus housing** | Dorm beds, typical room and board, meal plans, your housing office, and its application portal, with each link re-checked | Live: IPEDS plus the school's own housing site |
+| **My bookings** | Your recent re-checked rooms and their booking links | ResourcePilot's workflow records |
 
 Study rooms work for **any US school**, not only one campus. You enter your school email. Intake
 keeps only the domain, and the Campus Researcher matches it to the school in IPEDS. It then finds
@@ -25,26 +24,18 @@ If it finds nothing, it asks you for the link instead of guessing.
 Rooms are always free. ResourcePilot re-checks that the room is still open, then hands you the
 school's booking link: **you book it with your own sign-in**. ResourcePilot never reserves a room.
 
-The project bundle keeps the original ResourcePilot idea: one request and one payment across
-sellers that do not know each other, with all-or-nothing completion. You can add a free study room
-at your school to a bundle; it rides along outside escrow.
+- **Seven real uAgents.** Each has its own seed, address, port, process, profile README, Chat
+  Protocol manifest, and status card, and each does one job in the workflow.
+- **Real delegation.** The Orchestrator hands every step to another agent with `ctx.send` and a
+  correlated `TaskRequest`, and accepts only the matching `TaskResult`.
+- **Live data, checked twice.** Verification checks every room offer before you see it and
+  re-opens every official housing link itself. Campus Rooms reads the room again, uncached, right
+  before you get the link.
+- **Recovery is part of the product.** If a room is taken during the re-check, the Planner
+  reroutes to the other open rooms. A lost task is retried once. If LibCal's live times fail, you
+  get the school's booking link, never invented rooms.
 
-- **Fifteen real uAgents.** Nine platform agents, five demo seller agents, and one live seller,
-  Campus Rooms. Each has its own seed, address, port, process, profile README, and Chat Protocol
-  manifest.
-- **Live multi-seller negotiation.** Sellers answer real quote, hold, and commit messages over a
-  typed `ResourceHold` protocol (1.1.0). Nothing is looked up from a shared table.
-- **A trust gate before money.** Seller Verification rejects unverified, malformed, unreliable, or
-  policy-violating offers before you see a bundle, and shows you why. It also re-opens every
-  official housing link itself.
-- **Hold, then pay, then commit.** Escrow runs over the official Agent Payment Protocol, with a Mock
-  Stripe rail (no money moves) and a Fetch stable-testnet FET rail (verified on chain).
-- **Recovery is part of the product.** If a seller goes silent, the Planner reroutes around it. If
-  a room is taken during the re-check, you see the other open rooms. A failed booking keeps your
-  payment in escrow for one-click retry or refund, and refunds automatically if you wait.
-
-This repository uses public Fetch.ai packages and documentation only. The five demo sellers are
-demo businesses with illustrative catalogs, not real shops.
+This repository uses public Fetch.ai packages and documentation only.
 
 ## Start here
 
@@ -57,141 +48,108 @@ make start
 make profiles
 ```
 
-`make setup` installs locked dependencies and creates an ignored `.env` containing 15 random private
-seeds. It derives every address and seller wallet and writes `.profiles.json`. It never prints a
+`make setup` installs locked dependencies and creates an ignored `.env` containing one random
+private seed per agent. It derives every address and writes `.profiles.json`. It never prints a
 seed and asks before replacing an existing `.env`, because new seeds mean new agent identities.
 
-Already have a `.env` from the 13-agent version? Run `make bootstrap-missing` instead. It asks
-first, then adds identities only for the Campus Researcher and Campus Rooms. Every existing seed
-and address stays as it is.
+Already have a `.env` from the 15-agent version? Keep it. The seven agents keep their seeds, so
+their addresses and Agentverse profiles stay the same, and they keep the ports already in your
+`.env`. `make verify` names the leftover settings for agents that no longer run; you may delete
+them.
 
 Then connect the agents to Agentverse. Open every Inspector link that `make profiles` prints, and
-connect each agent with **Mailbox**: nine platform agents and six sellers. This is an
-account-bound step that you must do yourself in the browser. See
-[docs/agentverse-deployment.md](docs/agentverse-deployment.md).
+connect each of the seven agents with **Mailbox**. The Agentverse Basic plan allows 8 Mailbox
+agents, so all seven fit. This is an account-bound step that you must do yourself in the browser.
+See [docs/agentverse-deployment.md](docs/agentverse-deployment.md).
 
 ## The agents
 
-| Agent | Responsibility | Protocols | Port |
-| --- | --- | --- | --- |
-| Orchestrator | ASI:One entrypoint, services menu, workflow owner, cards, escrow payment | Chat, Tasks, Payment (`seller`) | 8000 |
-| Intake | Turns a submitted form into a validated brief; keeps only the school domain | Chat, Tasks | 8001 |
-| Seller Discovery | Fans out quote requests to sellers and collects real quotes | Chat, Tasks, ResourceHold (`buyer`) | 8002 |
-| Seller Verification | Trust gate (identity, protocol, track record, policy); re-checks housing links | Chat, Tasks | 8003 |
-| Logistics Analysis | Lead times and walking distance from your anchor | Chat, Tasks | 8004 |
-| Bundle Planner | Budget-safe bundles across sellers; ranks open rooms; reroutes around failures | Chat, Tasks | 8005 |
-| Checkout Coordinator | All-or-nothing hold and commit rounds across sellers | Chat, Tasks, ResourceHold (`buyer`) | 8006 |
-| Memory and Audit | Append-only workflow events, preferences, seller track records | Chat, Tasks | 8007 |
-| Campus Researcher | School from the email domain; its room-booking system and housing pages | Chat, Tasks | 8008 |
+| Key | Agent | Responsibility | Protocols | Port |
+| --- | --- | --- | --- | --- |
+| `orchestrator` | ResourcePilot Orchestrator | Runs the ASI:One chat, the services menu, cards, and the workflow | Chat, Tasks | 8000 |
+| `intake` | ResourcePilot Intake | Turns a submitted form into a validated brief, keeping only the school domain | Chat, Tasks | 8001 |
+| `researcher` | ResourcePilot Campus Researcher | Finds a school's room-booking system and housing pages from its email domain | Chat, Tasks | 8002 |
+| `campus_rooms` | ResourcePilot Campus Rooms | Reads open library rooms live and re-checks one before handing over the booking link | Chat, Tasks | 8003 |
+| `verification` | ResourcePilot Verification | Checks every room offer and re-opens official housing links before you see them | Chat, Tasks | 8004 |
+| `planner` | ResourcePilot Planner | Ranks open rooms and reroutes when a room is taken | Chat, Tasks | 8005 |
+| `memory_audit` | ResourcePilot Memory and Audit | Keeps the append-only audit timeline and your recent bookings | Chat, Tasks | 8006 |
 
-| Seller | Sells | Purpose | Port |
-| --- | --- | --- | --- |
-| Westwood Print Lab | Posters | Verified demo print shop | 8100 |
-| Gayley Copy Center | Posters | Verified demo alternative for rerouting | 8101 |
-| Flash Prints 4U | Posters | Cheapest, but **unverified**; Verification rejects it | 8102 |
-| Campus Gear Share | Cameras, microphones, tripods | Verified demo shop; DSLR requires training | 8103 |
-| Hilltop Studio Rooms | Podcast studio | Verified demo shop; one studio | 8104 |
-| Campus Rooms | Study rooms at your school | **Live**: open LibCal rooms as $0 booking handoffs | 8105 |
+"Chat" is the Agent Chat Protocol; "Tasks" is ResourcePilot's own `ResourcePilotTasks` protocol
+(`TaskRequest`, `TaskResult`, `AuditEvent`). Every agent publishes both manifests. Each one's
+profile chat answers with a status card that names its role and points to the Orchestrator.
 
 The Orchestrator delegates every step with `ctx.send` and correlated `TaskRequest`/`TaskResult`
 messages: workflow, request, requester, and session IDs, plus deadlines and duplicate protection.
-Each service has its own chain of specialists. Postgres is the shared durable store for workflows,
-rounds, holds, payments, the escrow ledger, audit events, seller track records, and the cache of
-public lookups.
+Postgres is the shared durable store for workflows, the audit timeline, one-time claims, and the
+cache of public lookups.
 
 ## How each service flows
 
 ```text
-Study rooms   Intake ─▶ Campus Researcher ─▶ Seller Discovery ══▶ Campus Rooms
-              ─▶ Seller Verification ─▶ Logistics ─▶ Bundle Planner ─▶ rooms carousel
-              "Re-check this room" ══HoldRequest══▶ Campus Rooms (live re-check)
-              "Get booking link"   ══CommitHold═══▶ Campus Rooms ─▶ your school's booking link
+Study rooms   Intake ─▶ Campus Researcher ─▶ Campus Rooms (live LibCal) ─▶ Verification
+              ─▶ Planner ─▶ rooms carousel
+              "View room" ─▶ "Re-check this room" ─▶ Campus Rooms re-reads that slot live
+                 still open ─▶ your school's booking link
+                 taken      ─▶ Planner again, without that room ─▶ rooms carousel
+              No booking system found ─▶ paste-link card ─▶ Campus Researcher checks the link
 
-Housing       Intake ─▶ Campus Researcher ─▶ Seller Verification (re-opens each link) ─▶ card
+Housing       Intake ─▶ Campus Researcher ─▶ Verification (re-opens each link) ─▶ housing card
 
-Bundle        Intake ─▶ [Campus Researcher, if you add a free room] ─▶ Seller Discovery
-              ══QuoteRequest══▶ sellers ─▶ Verification ─▶ Logistics ─▶ Planner ─▶ carousel
-              "Hold everything" ─▶ Checkout Coordinator ══HoldRequest══▶ every seller
-              "Pay" ◀── RequestPayment ── Orchestrator (escrow)
-              CommitPayment ─▶ verify ─▶ reserve ─▶ CommitHold to every seller ─▶ receipt
+My bookings   Orchestrator ─▶ your recent re-checked rooms
 ```
 
-Details are in [docs/architecture.md](docs/architecture.md).
+Every arrow between agents is a `TaskRequest` sent with `ctx.send` and answered by a `TaskResult`.
+Requests start only from a form; free text gets the services menu. Details are in
+[docs/architecture.md](docs/architecture.md).
 
-## Money: escrow, a visible booking fee, and free rooms
+## Trust: why the Orchestrator may send you to a link
 
-In a bundle, you pay each demo seller's own quoted price plus a booking fee: 3% of the subtotal
-plus 30 cents, set by `PLATFORM_FEE_BPS` and `PLATFORM_FEE_FIXED_CENTS`. The money goes to the
-Orchestrator's escrow. Each seller receives exactly what it quoted, and ResourcePilot keeps the
-fee, only after every booking commits. If anything fails, no seller is paid.
+Verification checks every room offer before you see it. An offer is dropped, with the reason
+recorded, unless all of these hold:
 
-- **Mock Stripe** calls no Stripe API, makes no chain transaction, and moves no money. `make
-  stripe-mock` runs a demo buyer agent that clicks through the cards and commits a `STRIPE_MOCK:`
-  payment.
-- **Pay test FET** uses faucet-issued tokens on Fetch stable-testnet. The Orchestrator checks the
-  on-chain transfer with cosmpy before anything is booked: sender, escrow recipient, minimum
-  amount, denom, network, and transaction replay. Seller payouts are recorded in the ledger. They
-  are sent as testnet transfers only when `FET_PAYOUTS_ENABLED=true`.
-- **Study rooms are $0** and are never part of escrow or the fee. A rooms-only request has no
-  payment step at all: after the live re-check, you get the booking link.
+1. The room is available, and the offer has a room name and a stable room ID.
+2. The booking link is https on your school's domain or its known booking vendor.
+3. When the offer has live times, its slot falls inside the window you asked for.
+4. When the room's seat count is known, it fits your group.
 
-FET mainnet and real-money payments are permanently unsupported. See
-[docs/payments.md](docs/payments.md).
-
-## Trust: why the Orchestrator may send you to a seller or a link
-
-Sellers come from a curated registry, so the registry is where identity lives. Every quote then
-passes four checks:
-
-1. **Identity.** The quote's authenticated sender must match the registry address of a verified
-   listing.
-2. **Protocol conformance.** Version, currency, hold time, listed categories, and arithmetic must
-   all check out.
-3. **Track record.** Sellers that fail too often are dropped, and new sellers have a capped line
-   value.
-4. **Policy.** Items must be available and meet training requirements. Campus Rooms offers must
-   be $0 handoffs whose link is on your school's domain or its booking vendor.
+For housing, Verification re-opens the housing office and application portal links itself and
+drops any that no longer open on the school's site.
 
 The Campus Researcher reads only public pages over https, on your school's domain or a known
 booking or housing vendor. It checks that every address it connects to is public, vets every
 redirect, and stops after a small fetch and time budget. Page text is treated as evidence, never
-as instructions. See [docs/trust-model.md](docs/trust-model.md).
-
-Optional Almanac discovery (`ALMANAC_DISCOVERY=true`) also asks agents that publish the
-`ResourceHold` seller protocol. Unlisted sellers are always rejected at the identity check.
+as instructions. Campus Rooms reads only a LibCal host on the school's own domain or `libcal.com`.
+See [docs/trust-model.md](docs/trust-model.md).
 
 ## Useful commands
 
 ```bash
-make start              # Postgres + 15 independently running uAgents
+make start              # Postgres + 7 independently running uAgents
 make logs               # follow all service logs
 make profiles           # addresses and Inspector/Profile URLs (never seeds)
 make verify             # check .env identities and the Compose file
-make bootstrap-missing  # add identities for new agents without changing existing ones
-make stripe-mock        # NO-MONEY demo buyer that books one bundle end to end
 make check              # format, lint, type-check, and tests
 make build              # build the Docker image
 make stop
 ```
 
-`uv run python scripts/print_cards.py purdue.edu` prints every card payload, validated exactly as
-the agents send it. With school domains, it runs the real Researcher and Campus Rooms quote
-against public pages.
+`uv run python scripts/print_cards.py` prints every card payload, validated exactly as the agents
+send it. Pass a school domain, such as `purdue.edu`, to also run the real Researcher and Campus
+Rooms logic against public pages. It needs no keys and never books anything.
 
-The test suite drives the real agent handlers in process: every role and seller is loaded as its own
-module with its own address. Every live source (IPEDS, LibCal, and school websites) is served by
-offline fakes, so no test touches the network. Set `TEST_DATABASE_URL` to also run the store
-contract and end-to-end checkout on real Postgres. CI does this.
+The test suite drives the real agent handlers in process: every role is loaded as its own module
+with its own address. Every live source (IPEDS, LibCal, and school websites) is served by offline
+fakes, so no test touches the network. Set `TEST_DATABASE_URL` to also run the store contract and
+the end-to-end network tests on real Postgres. CI does this.
 
 ## Documentation
 
 - [docs/demo-script.md](docs/demo-script.md): a three-minute demo that shows every judged feature
-- [docs/architecture.md](docs/architecture.md): messages, state, rounds, timeouts, and recovery
-- [docs/trust-model.md](docs/trust-model.md): seller registry, vetting layers, research bounds,
-  and their limits
-- [docs/payments.md](docs/payments.md): escrow, rails, verification, ledger, refunds, and free
-  room handoffs
-- [docs/agentverse-deployment.md](docs/agentverse-deployment.md): Mailbox for 15 agents and
+- [docs/architecture.md](docs/architecture.md): messages, state, timeouts, the re-check, and
+  recovery
+- [docs/trust-model.md](docs/trust-model.md): room-offer checks, housing link re-checks, research
+  bounds, and their limits
+- [docs/agentverse-deployment.md](docs/agentverse-deployment.md): Mailbox for 7 agents and
   persistent hosting
 - [docs/judging-checklist.md](docs/judging-checklist.md): evidence to capture before submitting
 - [docs/official-links.md](docs/official-links.md): the official Fetch.ai sources this follows
@@ -199,8 +157,9 @@ contract and end-to-end checkout on real Postgres. CI does this.
 
 ## What this does not claim
 
-ResourcePilot does not reserve study rooms, and it does not apply for or pay for housing. It links
-you to your school's own site, where you sign in yourself.
+ResourcePilot takes no payments of any kind: there is no payment rail, no Stripe integration, no
+FET, and no escrow. It does not reserve study rooms, and it does not apply for, reserve, or pay for
+housing. It links you to your school's own site, where you sign in yourself.
 
 Campus Rooms reads open times from the endpoint that LibCal's public booking page calls. That
 endpoint is not a documented API and may change. When it fails, you get the school's booking link,
@@ -208,11 +167,8 @@ never invented rooms. For other systems (EMS, 25Live, Skedda, Robin, or a plain 
 availability is not public, so you get only the link. IPEDS facts are the 2022 survey year; check
 current prices with the school.
 
-The Stripe rail is a local mock, not a Stripe integration or proof of payment. The five demo
-sellers, their catalogs, and their registry "verified" flags are demo data. This project does not
-use MCP, Google's A2A protocol, UCP, Skyfire, or AEVs. Almanac discovery is optional and off by
-default, and it has been tested only against a simulated Almanac. Profile links, chat links, and
-testnet transactions exist only after you run the manual steps above.
+This project does not use MCP, Google's A2A protocol, UCP, Skyfire, or AEVs. Profile links and
+chat links exist only after you run the manual steps above.
 
 ## Credits
 
