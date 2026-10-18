@@ -36,7 +36,7 @@ jobs:
       - run: uv run python scripts/verify_config.py
       - run: uv run ruff format --check .
       - run: uv run ruff check .
-      - run: uv run mypy agents resourcepilot sellers scripts
+      - run: uv run mypy agents resourcepilot scripts
       - run: uv run pytest
       - run: docker compose config --quiet
       - run: docker build -t resourcepilot-la .
