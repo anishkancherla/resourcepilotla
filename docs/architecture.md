@@ -32,10 +32,14 @@ starts a workflow for one service.
 | Service | Specialist chain | Ends with |
 | --- | --- | --- |
 | `rooms` | Intake → Campus Researcher → Discovery → Verification → Analysis → Planner | A rooms carousel, then a free booking-link checkout |
+| `wellness` | Intake → Campus Researcher → Discovery → Verification → Analysis → Planner | A wellness card: crisis line, open wellness rooms, the week's events (status `awaiting_selection`) |
+| `wellness`, no room system | Intake → Campus Researcher → Verification | The same card without rooms (status `answered`) |
 | `housing` | Intake → Campus Researcher → Verification | A housing card (status `answered`) |
 | `bundle` | Intake → [Campus Researcher] → Discovery → Verification → Analysis → Planner | A bundle carousel, then escrow checkout |
 
-A bundle asks the Researcher only when the form adds a free study room and a school email.
+A bundle asks the Researcher only when the form adds a free study room and a school email. A chain
+that ends at Verification is an answer (`answered`); one that ends at the Planner has options to
+pick from (`awaiting_selection`).
 
 Before any workflow exists, the Orchestrator reduces every email field to its domain
 (`scrub_fields`). The local part of the address is never stored, sent, or logged.
@@ -66,7 +70,19 @@ portal must be a link on the office's own pages, or on its housing vendor (StarR
 like an application or portal. Seller Verification then re-opens each official link itself and
 drops any that do not open.
 
-Results are cached per domain in `api_cache`: a week when found, a day otherwise. The fetch rules
+For wellness it finds the room system the same way but never pauses for a link: rooms are
+optional on the wellness card. It also looks for the school's public Localist calendar at
+`events.<domain>/api/2/events`, then `calendar.<domain>`, then `<school>.localist.com` (accepted
+only when its home page links back to the school). It keeps up to eight events in the next seven
+days whose title, keywords, tags, or filter names read as health or wellness, with only a capped
+title, start time, location, and link. A missing or failing feed is shown on the card, never a
+failed request. Campus Rooms then quotes `wellness_room` spaces from LibCal. If there are none,
+Verification, Analysis, and the Planner pass the reason through instead of failing. Verification
+also re-fetches the feed itself and drops events it no longer lists. Picking a room uses the same
+free re-check and booking-link checkout as study rooms.
+
+Results are cached per domain in `api_cache`: a week when found, a day otherwise. A week's event
+list is cached for 30 minutes. The fetch rules
 are in [trust-model.md](trust-model.md).
 
 ## The planning pipeline

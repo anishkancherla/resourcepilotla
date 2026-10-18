@@ -5,7 +5,8 @@
     uv run python scripts/print_cards.py purdue.edu      # plus live Researcher and Campus Rooms
 
 With school domains it runs the real Campus Researcher logic and the Campus Rooms quote against
-public pages (IPEDS, the school's site, LibCal). It needs no keys and never books anything.
+public pages (IPEDS, the school's site, LibCal, the school's Localist events feed). It needs no
+keys and never books anything.
 """
 
 from __future__ import annotations
@@ -77,12 +78,46 @@ async def live(domain: str, http: Http) -> None:
         )
     except (ProviderError, ValueError) as exc:
         print(f"\n=== {domain}: {exc}")
+    await live_wellness(domain, http)
+
+
+async def live_wellness(domain: str, http: Http) -> None:
+    """The wellness card with live rooms and events. Verification's re-checks are not run here."""
+    try:
+        day = (utc_now() + timedelta(days=1)).date().isoformat()
+        fields = {"school_domain": domain, "day": day, "window": "afternoon", "duration": "30"}
+        found = await research(
+            {"brief": room_brief(fields, service="wellness")}, http, now=utc_now()
+        )
+        options: list[dict[str, Any]] = []
+        if found.get("campus"):
+            brief = found["brief"]
+            request = QuoteRequest(
+                round_id="demo",
+                workflow_id="demo",
+                categories=["wellness_room"],
+                quantities={"wellness_room": 1},
+                window_start=brief["window_start"],
+                window_end=brief["window_end"],
+                campus=found["campus"],
+            )
+            listing = LISTING_BY_ID["campus_rooms"]
+            offers = await quote_rooms(build_http(follow_redirects=False), listing, request)
+            usable = [{**o, "seller_name": listing.display_name} for o in offers if o["available"]]
+            found["room_note"] = next(
+                (o["unavailable_reason"] for o in offers if not o["available"]), ""
+            )
+            options = plan_room_options(brief, usable)
+        show(f"Wellness at {domain}", cards.wellness_card("demo", {**found, "bundles": options}))
+    except (ProviderError, ValueError) as exc:
+        print(f"\n=== {domain} wellness: {exc}")
 
 
 async def main(domains: list[str]) -> None:
     show("Campus services menu", cards.welcome_card())
-    for service in ("rooms", "housing", "bundle"):
+    for service in ("rooms", "wellness", "housing", "bundle"):
         show(f"{service} form", cards.service_form(service))
+    show("Wellness card, nothing found", cards.wellness_card("demo", {}))
     show("Paste-link fallback", cards.room_link_card("demo", "Example University", "bundle"))
     http = build_http(MemoryStore())  # one cache, so IPEDS is fetched once for every domain
     try:

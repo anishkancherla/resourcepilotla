@@ -145,3 +145,32 @@ async def test_room_search_pauses_for_a_link_when_research_finds_no_system() -> 
     )
     assert paused is None
     assert (state["status"], state["stage"]) == ("awaiting_link", "link")
+
+
+async def test_wellness_without_a_room_system_skips_discovery_and_answers() -> None:
+    store = MemoryStore()
+    day = utc_now().date().isoformat()
+    fields = {"school_domain": "mit.edu", "day": day, "window": "any", "duration": "30"}
+    task = await start(store, {"service": "wellness", "fields": fields})
+    intake = execute_specialist("intake", task)
+    assert intake.ok, intake.error
+    research, _ = await accept_result(store, intake)
+    assert research is not None
+    no_rooms = {**research.payload, "rooms": {"status": "needs_link"}, "wellness": {}}
+    verify, _ = await accept_result(store, reply(research, no_rooms))
+    assert verify is not None and verify.target_role == "verification"
+    done, state = await accept_result(store, reply(verify, verify.payload))
+    assert done is None
+    assert (state["status"], state["stage"]) == ("answered", "complete")
+
+
+async def test_wellness_with_a_room_system_goes_to_discovery() -> None:
+    store = MemoryStore()
+    day = utc_now().date().isoformat()
+    fields = {"school_domain": "purdue.edu", "day": day, "window": "any", "duration": "30"}
+    task = await start(store, {"service": "wellness", "fields": fields})
+    research, _ = await accept_result(store, execute_specialist("intake", task))
+    assert research is not None
+    found = {**research.payload, "rooms": {"status": "found"}, "wellness": {}}
+    discovery, _ = await accept_result(store, reply(research, found))
+    assert discovery is not None and discovery.target_role == "discovery"

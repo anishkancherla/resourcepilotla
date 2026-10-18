@@ -51,6 +51,7 @@ from resourcepilot.checkout import (
 from resourcepilot.clock import later, parse, utc_now
 from resourcepilot.config import (
     ROLE_BY_KEY,
+    ROOM_SERVICES,
     SERVICES,
     SPECIALISTS,
     agent_addresses,
@@ -90,7 +91,7 @@ from resourcepilot.protocols import (
     seller_protocol_digest,
 )
 from resourcepilot.registry import LISTING_BY_ID, listings_for
-from resourcepilot.research import recheck_link, research
+from resourcepilot.research import recheck_events, recheck_link, research
 from resourcepilot.store import store
 from resourcepilot.workflow import (
     accept_result,
@@ -278,6 +279,8 @@ async def handle_chat(ctx: Context, sender: str, message: ChatMessage) -> None:
 FORM_PROMPTS = {
     "rooms": "Enter your school email and when you need a room. Only the domain is kept.",
     "housing": "Enter your school email. Only the domain is kept.",
+    "wellness": "Enter your school email and when you'd like a quiet room. Only the domain is "
+    "kept. In crisis? Call or text 988.",
     "bundle": "Demo shops near UCLA. Add your school email to include a free study room.",
 }
 FIELD_LIMIT = 200
@@ -376,6 +379,9 @@ async def _show_bundles(
 ) -> None:
     data = state["data"]
     prefix = f"{note} " if note else ""
+    if data["brief"].get("service") == "wellness":
+        await _show_wellness(ctx, sender, state, prefix=prefix)
+        return
     if data["brief"].get("service") == "rooms":
         school = str(data.get("school", {}).get("school_name") or "your school")
         count = len(data["bundles"])
@@ -486,7 +492,7 @@ async def _workflow_action(
         elif state["status"] == "awaiting_link":
             await _ask_for_link(ctx, sender, state)
         elif state["status"] == "answered":
-            await _show_housing(ctx, sender, state)
+            await _show_answer(ctx, sender, state)
         elif state["status"] == "awaiting_selection":
             await _show_bundles(ctx, sender, state)
         elif state["status"] == "awaiting_payment":
@@ -526,7 +532,7 @@ async def _workflow_action(
         return
     bundle = _bundle(state, str(selection.get("bundle_id", "")))
     if action == "view_bundle" and bundle:
-        rooms = state["data"]["brief"].get("service") == "rooms"
+        rooms = state["data"]["brief"].get("service") in ROOM_SERVICES
         await _send_card(
             ctx,
             sender,
@@ -578,13 +584,33 @@ def _chain(state: dict[str, Any]) -> tuple[str, ...]:
     return service_chain(str(state.get("service") or "bundle"), state.get("data") or {})
 
 
-async def _show_housing(ctx: Context, sender: str, state: dict[str, Any]) -> None:
+async def _show_answer(ctx: Context, sender: str, state: dict[str, Any]) -> None:
+    """A finished lookup with nothing to hold: housing, or wellness without a room system."""
+    if state.get("service") == "wellness":
+        await _show_wellness(ctx, sender, state)
+        return
     school = str(state["data"].get("school", {}).get("school_name") or "your school")
     await _send_card(
         ctx,
         sender,
         f"Housing at {school}: official facts and links. You apply on the school's site.",
         cards.housing_card(state["data"]),
+    )
+
+
+async def _show_wellness(
+    ctx: Context, sender: str, state: dict[str, Any], *, prefix: str = ""
+) -> None:
+    data = state["data"]
+    school = str(data.get("school", {}).get("school_name") or "your school")
+    rooms = len(data.get("bundles") or [])
+    events = len((data.get("wellness") or {}).get("events") or [])
+    await _send_card(
+        ctx,
+        sender,
+        f"{prefix}Wellness at {school}: {rooms} open room{'s' if rooms != 1 else ''} and "
+        f"{events} event{'s' if events != 1 else ''} this week. In crisis? Call or text 988.",
+        cards.wellness_card(str(state["workflow_id"]), data),
     )
 
 
@@ -1145,7 +1171,7 @@ async def _holds_result(ctx: Context, state: dict[str, Any], result: TaskResult)
     await _dispatch(ctx, task)
     narration = (
         f"{error}. Showing the other open rooms."
-        if state["data"]["brief"].get("service") == "rooms"
+        if state["data"]["brief"].get("service") in ROOM_SERVICES
         else f"{error}. Nothing was charged, and every other hold was released. "
         "The Bundle Planner is rerouting around them."
     )
@@ -1382,6 +1408,9 @@ async def handle_task(ctx: Context, sender: str, task: TaskRequest) -> None:
     if ROLE.key == "verification":
         seller_ids = [str(q.get("seller_id", "")) for q in task.payload.get("quotes", [])]
         context["seller_records"] = await store.seller_records(seller_ids)
+        if task.payload.get("brief", {}).get("service") == "wellness":
+            await ctx.send(sender, await _verify_wellness(task, context))
+            return
     await ctx.send(sender, execute_specialist(ROLE.key, task, context))
 
 
@@ -1409,6 +1438,24 @@ async def _verify_housing(task: TaskRequest) -> TaskResult:
             housing[key] = ""
     housing["unverified"] = dropped
     return task_result(task, "verification", ok=True, payload={**payload, "housing": housing})
+
+
+async def _verify_wellness(task: TaskRequest, context: dict[str, Any]) -> TaskResult:
+    """Vet Campus Rooms' wellness quotes, if any, then re-fetch the events feed independently."""
+    if "quotes" in task.payload:
+        vetted = execute_specialist("verification", task, context)
+        if not vetted.ok:
+            return vetted
+        payload = dict(vetted.payload)
+    elif task.target_role != "verification" or utc_now() > parse(task.deadline_at):
+        return task_result(task, "verification", ok=False, error="Task timed out; retrying")
+    else:
+        payload = dict(task.payload)
+    school = {str(k): str(v) for k, v in dict(payload.get("school") or {}).items()}
+    wellness = dict(payload.get("wellness") or {})
+    if school.get("domain"):
+        wellness = await recheck_events(_http(), wellness, school)
+    return task_result(task, "verification", ok=True, payload={**payload, "wellness": wellness})
 
 
 @task_proto.on_message(model=TaskResult)
@@ -1459,7 +1506,7 @@ async def handle_task_result(ctx: Context, sender: str, result: TaskResult) -> N
     elif state["status"] == "awaiting_link":
         await _ask_for_link(ctx, result.requester, state)
     elif state["status"] == "answered":
-        await _show_housing(ctx, result.requester, state)
+        await _show_answer(ctx, result.requester, state)
     elif state["status"] == "awaiting_selection":
         await _show_bundles(ctx, result.requester, state)
     elif state["status"] == "failed":

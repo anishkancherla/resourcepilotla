@@ -146,3 +146,17 @@ def test_upcoming_days_are_local_select_options() -> None:
     days = upcoming_days(NOW, 3)
     assert days[0] == ("2026-10-21", "Wed Oct 21")
     assert len(days) == 3
+
+
+def test_wellness_brief_is_for_one_person_and_asks_nothing_about_health() -> None:
+    brief = intake_handler(
+        {"service": "wellness", "fields": {**ROOM, "group_size": "6"}, "now": NOW.isoformat()}
+    )["brief"]
+    assert brief["service"] == "wellness"
+    assert brief["items"] == {"wellness_room": 1}
+    assert (brief["duration_minutes"], brief["group_size"], brief["budget_cents"]) == (30, 1, 0)
+    assert brief["notes"] == ""
+    with pytest.raises(ValueError, match="duration"):
+        room_brief({**ROOM, "duration": "120"}, now=NOW, service="wellness")
+    with pytest.raises(ValueError, match="wellness rooms and events"):
+        room_brief({**ROOM, "school_domain": ""}, now=NOW, service="wellness")

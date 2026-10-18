@@ -60,7 +60,7 @@ def analysis_handler(payload: dict[str, Any], context: dict[str, Any]) -> dict[s
             )
         analyzed.append(offer)
     covered = {offer["category"] for offer in analyzed}
-    if not covered:
+    if not covered and brief.get("service") != "wellness":
         raise ValueError("No trusted offer can be ready before the booking starts")
     return {
         **payload,

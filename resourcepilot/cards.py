@@ -17,11 +17,13 @@ from zoneinfo import ZoneInfo
 from uagents_core.contrib.protocols.chat import ChatMessage, MetadataContent, TextContent
 
 from resourcepilot.clock import CAMPUS_TZ, parse, utc_now
+from resourcepilot.config import ROOM_SERVICES
 from resourcepilot.escrow import note_for, rail_label
 from resourcepilot.intake import (
     ANCHORS,
     PRIORITIES,
     ROOM_DURATIONS,
+    WELLNESS_DURATIONS,
     brief_zone,
     describe_window,
     upcoming_days,
@@ -81,10 +83,28 @@ KNOWN_ACTIONS = (
 # Prose that only opens a service's form, never submits one.
 SERVICE_WORDS = (
     ("rooms", re.compile(r"\bstudy\s*rooms?\b|\blibrary\s+rooms?\b|\bbook\s+a\s+room\b", re.I)),
+    (
+        "wellness",
+        re.compile(
+            r"\bwellness\b|\bmeditation\b|\bmental\s+health\b|\bhealth\s+events?\b"
+            r"|\bflu\s+shots?\b",
+            re.I,
+        ),
+    ),
     ("housing", re.compile(r"\bhousing\b|\bdorms?\b|\bresidence\s+halls?\b", re.I)),
     ("bundle", re.compile(r"\bproject\s+bundle\b|\bdemo\s+bundle\b|\bdemo\s+shops?\b", re.I)),
 )
-SERVICE_TITLES = {"rooms": "Study rooms", "housing": "Campus housing", "bundle": "Project bundle"}
+SERVICE_TITLES = {
+    "rooms": "Study rooms",
+    "wellness": "Health & wellness",
+    "housing": "Campus housing",
+    "bundle": "Project bundle",
+}
+# Static on purpose: crisis help never depends on a crawl, a feed, or a school being found.
+CRISIS_TEXT = (
+    "In crisis? Call or text 988, the Suicide & Crisis Lifeline, any time. "
+    "In an emergency, call 911."
+)
 
 
 # ---------------------------------------------------------------------------
@@ -309,6 +329,14 @@ SERVICES_MENU = (
         "book it on your school's site with your own sign-in.",
     ),
     (
+        "wellness",
+        "Health & wellness",
+        "Live · any school",
+        "success",
+        "Meditation and quiet rooms open at your school, plus this week's wellness events and "
+        "clinics. Free: you book or RSVP on your school's site. We never ask about your health.",
+    ),
+    (
         "housing",
         "Campus housing",
         "Live · IPEDS",
@@ -359,6 +387,7 @@ def welcome_card() -> tuple[str, dict[str, Any]]:
         )
     children.append({"type": "divider"})
     children.append(_button("My bookings", {"action": "show_bookings"}))
+    children.append({"type": "text", "value": CRISIS_TEXT, "style": "muted"})
     return "custom", {
         "root": {"type": "section", "title": "ResourcePilot campus services", "children": children}
     }
@@ -447,6 +476,28 @@ def rooms_form(days: list[tuple[str, str]] | None = None) -> tuple[str, dict[str
     }
 
 
+def wellness_form(days: list[tuple[str, str]] | None = None) -> tuple[str, dict[str, Any]]:
+    """No health questions: only the school, a day, and how long a quiet room is needed."""
+    return "form", {
+        "title": f"Health & wellness at your school. {CRISIS_TEXT}",
+        "fields": [
+            _email_field(),
+            _select("day", "Day", _day_options(days or upcoming_days()), required=True),
+            _select(
+                "window",
+                "Time of day",
+                [(key, value[0]) for key, value in WINDOWS.items()],
+                required=True,
+            ),
+            _select("duration", "Quiet room for", list(WELLNESS_DURATIONS.items()), required=True),
+        ],
+        "submit_cta": {
+            "label": "Find rooms and events",
+            "selection": {"action": "submit_form", "service": "wellness"},
+        },
+    }
+
+
 def housing_form() -> tuple[str, dict[str, Any]]:
     return "form", {
         "title": "Housing at your school",
@@ -513,6 +564,8 @@ def bundle_form(days: list[tuple[str, str]] | None = None) -> tuple[str, dict[st
 def service_form(service: str) -> tuple[str, dict[str, Any]]:
     if service == "rooms":
         return rooms_form()
+    if service == "wellness":
+        return wellness_form()
     if service == "housing":
         return housing_form()
     return bundle_form()
@@ -703,8 +756,9 @@ def rooms_carousel(
 def _line_row(line: dict[str, Any]) -> dict[str, str]:
     if line.get("handoff"):
         when = f" · {line['slot_label']}" if line.get("slot_label") else ""
+        kind = "Wellness room" if line.get("category") == "wellness_room" else "Study room"
         return {
-            "label": f"Study room · {line.get('school_name') or 'your school'}",
+            "label": f"{kind} · {line.get('school_name') or 'your school'}",
             "value": f"{line['name']}{when}: free, you book it",
         }
     return {
@@ -714,7 +768,7 @@ def _line_row(line: dict[str, Any]) -> dict[str, str]:
 
 
 def bundle_rows(brief: dict[str, Any], bundle: dict[str, Any]) -> list[dict[str, str]]:
-    if brief.get("service") == "rooms":
+    if brief.get("service") in ROOM_SERVICES:
         return room_rows(bundle["lines"][0])
     rows = [_line_row(line) for line in bundle["lines"]]
     rows.extend(
@@ -768,6 +822,8 @@ def room_rows(line: dict[str, Any]) -> list[dict[str, str]]:
             },
         ]
     )
+    if line.get("category") == "wellness_room":
+        rows.append({"label": "Need help now?", "value": CRISIS_TEXT})
     return rows
 
 
@@ -775,7 +831,7 @@ def bundle_detail(
     workflow_id: str, brief: dict[str, Any], bundle: dict[str, Any], *, checkout: bool
 ) -> tuple[str, dict[str, Any]]:
     ids = {"workflow_id": workflow_id, "bundle_id": bundle["bundle_id"]}
-    rooms = brief.get("service") == "rooms"
+    rooms = brief.get("service") in ROOM_SERVICES
     ctas = []
     if checkout:
         ctas.append(
@@ -1020,6 +1076,131 @@ def housing_card(state_data: dict[str, Any]) -> tuple[str, dict[str, Any]]:
     }
 
 
+def wellness_card(workflow_id: str, data: dict[str, Any]) -> tuple[str, dict[str, Any]]:
+    """Crisis line first, then open wellness rooms, then the week's events. Never empty."""
+    school = dict(data.get("school") or {})
+    name = str(school.get("school_name") or "your school")
+    wellness = dict(data.get("wellness") or {})
+    options = list(data.get("bundles") or [])
+    children: list[dict[str, Any]] = [
+        {"type": "badge", "label": "Crisis help · 24/7", "variant": "warning"},
+        {"type": "text", "value": CRISIS_TEXT, "style": "body"},
+        {"type": "divider"},
+        {"type": "heading", "value": "Wellness rooms open", "level": 3},
+    ]
+    if options:
+        for option in options:
+            line = option["lines"][0]
+            where = str(line.get("location_label") or "")
+            detail = " · ".join(
+                part
+                for part in (str(line.get("slot_label") or ""), where)
+                # LibCal often names a one-room group after the room itself.
+                if part and part != str(line["name"])
+            )
+            children.append(
+                {
+                    "type": "group",
+                    "direction": "row",
+                    "children": [
+                        {"type": "text", "value": f"{line['name']} · {detail}", "style": "body"},
+                        _button(
+                            "View room",
+                            {
+                                "action": "view_bundle",
+                                "workflow_id": workflow_id,
+                                "bundle_id": option["bundle_id"],
+                            },
+                        ),
+                    ],
+                }
+            )
+        children.append(
+            {
+                "type": "text",
+                "value": "Free. Re-checked live before you get the booking link.",
+                "style": "muted",
+            }
+        )
+    else:
+        rooms = dict(data.get("rooms") or {})
+        if data.get("room_note"):
+            note = str(data["room_note"])
+        elif rooms.get("status") != "found":
+            note = f"No public room-booking system found for {name}"
+        else:
+            note = f"No wellness room at {name} is open in that window"
+        children.append({"type": "text", "value": note, "style": "muted"})
+    children.extend(
+        [{"type": "divider"}, {"type": "heading", "value": "Wellness events this week", "level": 3}]
+    )
+    events = list(wellness.get("events") or [])
+    if events:
+        children.append(
+            {
+                "type": "list",
+                "items": [
+                    {
+                        "children": [
+                            {"type": "text", "value": str(event["title"]), "style": "body"},
+                            {
+                                "type": "text",
+                                "value": " · ".join(
+                                    part
+                                    for part in (
+                                        str(event["when"]),
+                                        str(event.get("location") or ""),
+                                    )
+                                    if part
+                                ),
+                                "style": "muted",
+                            },
+                            {"type": "text", "value": f"RSVP: {event['url']}", "style": "muted"},
+                        ]
+                    }
+                    for event in events
+                ],
+            }
+        )
+    elif wellness.get("status") == "found":
+        children.append(
+            {"type": "text", "value": "No wellness events listed this week", "style": "muted"}
+        )
+    elif wellness.get("status") == "unavailable":
+        children.append(
+            {"type": "text", "value": "The events calendar did not answer", "style": "muted"}
+        )
+    else:
+        children.append(
+            {
+                "type": "text",
+                "value": f"No public events calendar found for {name}",
+                "style": "muted",
+            }
+        )
+    sources = []
+    if wellness.get("feed_host"):
+        sources.append(f"Events: {wellness['feed_host']} (Localist), re-checked by Verification.")
+    if wellness.get("unverified"):
+        sources.append(f"Dropped events no longer listed: {len(wellness['unverified'])}.")
+    sources.append("ResourcePilot never asks about your health or books appointments.")
+    children.extend(
+        [
+            {"type": "divider"},
+            {"type": "text", "value": " ".join(sources), "style": "muted"},
+            _buttons(
+                [
+                    ("Study rooms", {"action": "open_service", "service": "rooms"}),
+                    ("Start over", {"action": "start_over"}),
+                ]
+            ),
+        ]
+    )
+    return "custom", {
+        "root": {"type": "section", "title": f"Health & wellness at {name}", "children": children}
+    }
+
+
 def recovery_card(
     workflow_id: str, error: str, total_cents: int, refund_due_at: str
 ) -> tuple[str, dict[str, Any]]:
@@ -1096,7 +1277,7 @@ def vetting_card(workflow_id: str, rejections: list[dict[str, str]]) -> tuple[st
 
 def _booking_row(booking: dict[str, Any]) -> dict[str, str]:
     brief, bundle = booking["data"]["brief"], booking["bundle"]
-    if brief.get("service") == "rooms":
+    if brief.get("service") in ROOM_SERVICES:
         line = bundle["lines"][0]
         return {
             "label": str(line.get("slot_label") or describe_window(brief)),

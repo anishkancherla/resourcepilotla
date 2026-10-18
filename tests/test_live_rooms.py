@@ -26,6 +26,7 @@ from sellers.live_rooms import (
     parse_libcal_resources,
     quote_rooms,
     study_spaces,
+    wellness_spaces,
 )
 
 ROOMS = LISTING_BY_ID["campus_rooms"]
@@ -53,6 +54,12 @@ def quote_request(start: str = at(12), end: str = at(17), **context: str) -> Quo
     )
 
 
+def wellness_request(**context: str) -> QuoteRequest:
+    return quote_request(**context).copy(
+        update={"categories": ["wellness_room"], "quantities": {"wellness_room": 1}}
+    )
+
+
 def hold_request(item_id: str, start: str, end: str, **context: str) -> HoldRequest:
     return HoldRequest(
         round_id="round-2",
@@ -74,9 +81,12 @@ def test_libcal_rooms_and_open_runs_parse_from_public_pages() -> None:
         (101, "HSSE 2101", 6),
         (102, "WALC 3138", 2),
         (103, "Bernette b64 Serger", 0),
+        (104, "Meditation Room", 1),
     ]
     assert rooms[2]["grouping"] == "Knowledge Lab Specialty Textile Machines"
+    # A meditation room is never offered as a study room, and a wellness search offers nothing else.
     assert [room["eid"] for room in study_spaces(rooms, 1)] == [101, 102]
+    assert [room["eid"] for room in wellness_spaces(rooms)] == [104]
     slots = libcal_grid(SEARCH_DAY, {"101@12:00", "101@12:30"})["slots"]
     runs = open_runs(slots, 101, SEARCH_DAY)
     assert runs == [(8 * 60, 12 * 60), (13 * 60, 22 * 60)]
@@ -223,3 +233,63 @@ async def test_demo_sellers_refuse_a_free_reference() -> None:
     )
     assert isinstance(refused, HoldRejected)
     assert (await store.get_hold("gear-1"))["status"] == "held"
+
+
+async def test_wellness_quotes_offer_only_wellness_spaces_as_free_handoffs() -> None:
+    offers = await quote_rooms(fake_http(), ROOMS, wellness_request(duration_minutes="30"))
+    assert [(offer["name"], offer["item_id"]) for offer in offers] == [
+        ("Meditation Room", "libcal-9-11-104")
+    ]
+    offer = offers[0]
+    assert (offer["category"], offer["subtotal_cents"], offer["handoff"]) == (
+        "wellness_room",
+        0,
+        True,
+    )
+    assert offer["tags"] == ["wellness", "room"]
+    assert offer["handoff_url"] == "https://calendar.lib.purdue.edu/space/104"
+    assert (offer["slot_start"], offer["slot_end"]) == (at(12), at(12, 30))
+
+
+async def test_wellness_quotes_explain_when_there_is_nothing_to_book() -> None:
+    no_spaces = await quote_rooms(
+        fake_http(),
+        ROOMS,
+        wellness_request(domain="ucla.edu", libcal_host="calendar.library.ucla.edu"),
+    )
+    no_libcal = await quote_rooms(
+        fake_http(),
+        ROOMS,
+        wellness_request(system="page", libcal_host="", booking_url="https://lib.purdue.edu/r"),
+    )
+    booked = {f"104@{hour:02d}:{minute:02d}" for hour in range(12, 17) for minute in (0, 30)}
+    full = await quote_rooms(fake_http(booked=booked), ROOMS, wellness_request())
+    for offers, reason in (
+        (no_spaces, "No wellness rooms are listed"),
+        (no_libcal, "doesn't list wellness rooms"),
+        (full, "No wellness room at"),
+    ):
+        assert len(offers) == 1 and offers[0]["available"] is False
+        assert reason in offers[0]["unavailable_reason"]
+        assert offers[0]["category"] == "wellness_room"
+
+
+async def test_wellness_hold_rechecks_the_slot_live() -> None:
+    held = await hold_room(
+        fake_http(),
+        MemoryStore(),
+        ROOMS,
+        hold_request("libcal-9-11-104", at(14), at(14, 30)),
+        ttl_seconds=60,
+        now=NOW,
+    )
+    assert isinstance(held, HoldConfirmed)
+    taken = await hold_room(
+        fake_http(booked={"104@14:00"}),
+        MemoryStore(),
+        ROOMS,
+        hold_request("libcal-9-11-104", at(14), at(14, 30)),
+        ttl_seconds=60,
+        now=NOW,
+    )
+    assert isinstance(taken, HoldRejected)

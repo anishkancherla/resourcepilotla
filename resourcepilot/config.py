@@ -77,7 +77,7 @@ PLATFORM_ROLES: Final[tuple[AgentIdentity, ...]] = (
     AgentIdentity(
         "verification",
         "ResourcePilot Seller Verification",
-        "Vets sellers four ways and re-checks official housing links live",
+        "Vets sellers four ways and re-checks official housing links and event feeds live",
         8003,
     ),
     AgentIdentity(
@@ -107,7 +107,7 @@ PLATFORM_ROLES: Final[tuple[AgentIdentity, ...]] = (
     AgentIdentity(
         "researcher",
         "ResourcePilot Campus Researcher",
-        "Finds a school's room-booking system and housing pages from its email domain",
+        "Finds a school's room system, housing pages, and events feed from its email domain",
         8008,
     ),
 )
@@ -151,7 +151,7 @@ SELLER_AGENTS: Final[tuple[AgentIdentity, ...]] = (
     AgentIdentity(
         "campus_rooms",
         "Campus Rooms (live library rooms)",
-        "Quotes real open library study rooms at any school as free booking handoffs",
+        "Quotes real open study and wellness rooms at any school as free booking handoffs",
         8105,
         "seller",
     ),
@@ -163,9 +163,12 @@ SELLER_BY_KEY: Final = {seller.key: seller for seller in SELLER_AGENTS}
 
 # The sequential pipelines, one per campus service. Discovery fans out to sellers inside its own
 # step. A project bundle visits the Campus Researcher only when the student adds a school email.
-SERVICES: Final = ("rooms", "housing", "bundle")
+SERVICES: Final = ("rooms", "wellness", "housing", "bundle")
+# Services whose options are free live-room handoffs from Campus Rooms.
+ROOM_SERVICES: Final = ("rooms", "wellness")
 SERVICE_CHAINS: Final[dict[str, tuple[str, ...]]] = {
     "rooms": ("intake", "researcher", "discovery", "verification", "analysis", "planner"),
+    "wellness": ("intake", "researcher", "discovery", "verification", "analysis", "planner"),
     "housing": ("intake", "researcher", "verification"),
     "bundle": ("intake", "researcher", "discovery", "verification", "analysis", "planner"),
 }
@@ -177,6 +180,10 @@ def service_chain(service: str, payload: dict[str, object] | None = None) -> tup
     brief = (payload or {}).get("brief")
     if service == "bundle" and not (isinstance(brief, dict) and brief.get("school_domain")):
         return tuple(role for role in chain if role != "researcher")
+    rooms = (payload or {}).get("rooms")
+    if service == "wellness" and isinstance(rooms, dict) and rooms.get("status") != "found":
+        # No room system to quote from: the wellness card shows events and the crisis line only.
+        return SERVICE_CHAINS["housing"]
     return chain
 
 

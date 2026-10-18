@@ -109,7 +109,7 @@ LISTINGS: Final[tuple[SellerListing, ...]] = (
     SellerListing(
         "campus_rooms",
         "Campus Rooms",
-        ("study_room",),
+        ("study_room", "wellness_room"),
         "Your school's library",
         None,
         None,
@@ -128,6 +128,7 @@ CATEGORIES: Final = {
     "tripod": "Tripod",
     "podcast_room": "Podcast studio",
     "study_room": "Study room at your school",
+    "wellness_room": "Wellness room at your school",
     "posters": "Color posters",
 }
 # Categories priced per item rather than per hour.

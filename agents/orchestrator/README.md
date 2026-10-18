@@ -6,6 +6,10 @@ school. Everything runs on buttons and short forms.
 - **Study rooms.** Enter your school email and a time. The Campus Researcher finds your library's
   room system, and Campus Rooms shows real open rooms. ResourcePilot re-checks the room you pick
   and hands you the school's booking link; you book with your own sign-in. It is always free.
+- **Health & wellness.** Enter your school email and a time. Campus Rooms shows open meditation,
+  reflection, sensory, and other wellness rooms from your school's LibCal, and the Campus
+  Researcher lists the week's health and wellness events with their RSVP links. Every wellness card
+  starts with 988 and 911. ResourcePilot never asks about your health or books appointments.
 - **Campus housing.** IPEDS dorm beds, typical room and board, and meal plans, plus your housing
   office and application portal, re-checked live. You apply on the school's site.
 - **Project bundle.** A labeled demo: a camera, a podcast studio, and posters from five demo shops

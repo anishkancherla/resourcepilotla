@@ -183,12 +183,18 @@ def verification_handler(payload: dict[str, Any], context: dict[str, Any]) -> di
     for seller_id in payload.get("no_response", []):
         _reject(rejections, str(seller_id), "availability", "Did not answer in time")
     covered = {offer["category"] for offer in offers}
-    if not covered:
-        reasons = list(dict.fromkeys(r["reason"] for r in rejections if r["stage"] == "policy"))
+    reasons = list(dict.fromkeys(r["reason"] for r in rejections if r["stage"] == "policy"))
+    wellness = brief.get("service") == "wellness"
+    if not covered and not wellness:
         if brief.get("service") == "rooms" and reasons:
             raise ValueError(reasons[0])
         raise ValueError("No trustworthy seller could offer any of the requested resources")
-    carried = {key: payload[key] for key in ("campus", "school", "rooms") if key in payload}
+    carried = {
+        key: payload[key] for key in ("campus", "school", "rooms", "wellness") if key in payload
+    }
+    if wellness:
+        # Rooms are optional on the wellness card: say why there are none instead of failing.
+        carried["room_note"] = "" if covered else (reasons[0] if reasons else "")
     return {
         **carried,
         "brief": brief,

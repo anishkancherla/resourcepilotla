@@ -225,14 +225,16 @@ def test_services_menu_opens_each_service_and_bookings() -> None:
     walk(menu["root"])
     assert selections == [
         {"action": "open_service", "service": "rooms"},
+        {"action": "open_service", "service": "wellness"},
         {"action": "open_service", "service": "housing"},
         {"action": "open_service", "service": "bundle"},
         {"action": "show_bookings"},
     ]
     assert "Demo shops" in json.dumps(menu)
+    assert cards.CRISIS_TEXT in json.dumps(menu, ensure_ascii=False)
 
 
-@pytest.mark.parametrize("service", ["rooms", "housing", "bundle"])
+@pytest.mark.parametrize("service", ["rooms", "wellness", "housing", "bundle"])
 def test_every_form_submits_its_own_service(service) -> None:
     _, form = cards.service_form(service)
     for field in form["fields"]:
@@ -380,3 +382,21 @@ def test_every_orchestrator_reply_is_a_card() -> None:
         source = (ROOT / path).read_text()
         assert "TextContent(" not in source
         assert "ChatMessage(" not in source
+
+
+def test_wellness_card_always_carries_the_crisis_line() -> None:
+    kind, payload = cards.wellness_card("wf-1", {"school": {"school_name": "Test U"}})
+    message = cards.card_message("x", kind, payload)
+    encoded = json.dumps(payload, ensure_ascii=False)
+    assert message.content[1].metadata["card_kind"] == "custom"
+    assert cards.CRISIS_TEXT in encoded
+    assert "No public room-booking system found for Test U" in encoded
+    assert "No public events calendar found for Test U" in encoded
+    _, form = cards.wellness_form()
+    assert cards.CRISIS_TEXT in form["title"]
+    assert {field["name"] for field in form["fields"]} == {"email", "day", "window", "duration"}
+
+
+def test_wellness_prose_only_opens_the_form() -> None:
+    for text in ("any wellness events?", "I need a meditation space", "flu shot near me"):
+        assert cards.parse_selection(text) == {"action": "open_service", "service": "wellness"}

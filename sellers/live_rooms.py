@@ -1,4 +1,4 @@
-"""Campus Rooms: real open library study rooms at any school, quoted as free booking handoffs.
+"""Campus Rooms: real open study and wellness rooms at any school, quoted as free booking handoffs.
 
 For LibCal schools the room list comes from the public ``/allspaces`` page and open slots from the
 ``/spaces/availability/grid`` endpoint the public booking page itself calls. That endpoint is not
@@ -41,6 +41,7 @@ MAX_OFFERS = 6
 DIRECTORY_TTL = 24 * 3600
 GRID_TTL = 120
 CATEGORY = "study_room"
+WELLNESS_CATEGORY = "wellness_room"
 # LibCal lists every bookable thing as a "space": sergers, terminals, studios. Students asked for
 # a room to study in, so equipment and special-purpose spaces are left out, and study-room groups
 # are tried first.
@@ -51,6 +52,13 @@ NOT_STUDY = re.compile(
     re.I,
 )
 STUDY = re.compile(r"study|group|collaborat|\bpods?\b|booth|commons|meeting|discussion", re.I)
+# Spaces for rest and reflection. They are never offered as study rooms, and a wellness search
+# offers nothing else. A wellness search never asks why the student wants the room.
+WELLNESS = re.compile(
+    r"meditat|reflection|prayer|wellness|well-?being|mindful|relax|\bnap\b|lactation|"
+    r"nursing|sensory",
+    re.I,
+)
 
 
 def _js_field(block: str, name: str) -> Any:
@@ -86,7 +94,17 @@ def study_spaces(rooms: list[dict[str, Any]], group: int) -> list[dict[str, Any]
         room
         for room in rooms
         if not NOT_STUDY.search(f"{room['grouping']} {room['name']}")
+        and not WELLNESS.search(f"{room['grouping']} {room['name']}")
         and (not room["capacity"] or room["capacity"] >= group)
+    ]
+
+
+def wellness_spaces(rooms: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return [
+        room
+        for room in rooms
+        if WELLNESS.search(f"{room['grouping']} {room['name']}")
+        and not NOT_STUDY.search(f"{room['grouping']} {room['name']}")
     ]
 
 
@@ -185,10 +203,13 @@ async def libcal_grid(
     return slots
 
 
-def _offer(listing: SellerListing, campus: dict[str, str], **fields: Any) -> dict[str, Any]:
+def _offer(
+    listing: SellerListing, campus: dict[str, str], category: str = CATEGORY, **fields: Any
+) -> dict[str, Any]:
     school = campus.get("school_name") or campus.get("domain", "your school")
+    wellness = category == WELLNESS_CATEGORY
     return {
-        "category": CATEGORY,
+        "category": category,
         "seller_id": listing.seller_id,
         "unit": "hour",
         "unit_price_cents": 0,
@@ -199,7 +220,7 @@ def _offer(listing: SellerListing, campus: dict[str, str], **fields: Any) -> dic
         "deposit_cents": 0,
         "requires_training": False,
         "rating": None,
-        "tags": ["study", "room"],
+        "tags": ["wellness", "room"] if wellness else ["study", "room"],
         "available": True,
         "unavailable_reason": "",
         "handoff": True,
@@ -212,11 +233,18 @@ def _offer(listing: SellerListing, campus: dict[str, str], **fields: Any) -> dic
     }
 
 
-def page_offer(listing: SellerListing, campus: dict[str, str], hours: float, note: str) -> dict:
+def page_offer(
+    listing: SellerListing,
+    campus: dict[str, str],
+    hours: float,
+    note: str,
+    category: str = CATEGORY,
+) -> dict:
     label = campus.get("system_label") or "booking page"
     return _offer(
         listing,
         campus,
+        category,
         item_id=PAGE_ITEM,
         name=f"Book on {campus.get('school_name') or 'your school'}'s {label}",
         hours=round(hours, 2),
@@ -227,18 +255,47 @@ def page_offer(listing: SellerListing, campus: dict[str, str], hours: float, not
     )
 
 
+def _not_offered(
+    listing: SellerListing, campus: dict[str, str], hours: float, reason: str
+) -> list[dict[str, Any]]:
+    """A wellness search that found nothing to book: a reason for the card, never a room."""
+    return [
+        {
+            **page_offer(listing, campus, hours, reason, WELLNESS_CATEGORY),
+            "available": False,
+            "unavailable_reason": reason,
+        }
+    ]
+
+
 async def quote_rooms(
     http: Http, listing: SellerListing, request: QuoteRequest
 ) -> list[dict[str, Any]]:
     campus = dict(request.campus)
-    if CATEGORY not in request.categories or not _campus_ok(campus):
+    if CATEGORY in request.categories:
+        category = CATEGORY
+    elif WELLNESS_CATEGORY in request.categories:
+        category = WELLNESS_CATEGORY
+    else:
         return []
+    if not _campus_ok(campus):
+        return []
+    wellness = category == WELLNESS_CATEGORY
+    school = campus.get("school_name") or "your school"
     zone = ZoneInfo(campus.get("timezone") or "America/Los_Angeles")
     day, low, high = _local_window(request, zone)
     duration = int(campus.get("duration_minutes") or (high - low))
-    group = max(1, int(campus.get("group_size") or 1))
+    group = 1 if wellness else max(1, int(campus.get("group_size") or 1))
     host = libcal_host(campus)
     if not host:
+        if wellness:
+            # Only LibCal lists spaces publicly; a link-only page could not say it has any.
+            return _not_offered(
+                listing,
+                campus,
+                duration / 60,
+                f"{school}'s room system doesn't list wellness rooms",
+            )
         if not safe_url(campus.get("booking_url", ""), campus.get("domain", "")):
             return []
         return [page_offer(listing, campus, duration / 60, "Availability isn't public")]
@@ -248,7 +305,12 @@ async def quote_rooms(
         html = await http.get_text(
             f"https://{host}/allspaces", provider="LibCal", cache_ttl=DIRECTORY_TTL
         )
-        rooms = study_spaces(parse_libcal_resources(str(html)), group)
+        listed = parse_libcal_resources(str(html))
+        rooms = wellness_spaces(listed) if wellness else study_spaces(listed, group)
+        if wellness and not rooms:
+            return _not_offered(
+                listing, campus, duration / 60, f"No wellness rooms are listed in {school}'s LibCal"
+            )
         groups: dict[tuple[int, int], list[dict[str, Any]]] = {}
         for room in rooms:
             groups.setdefault((room["lid"], room["gid"]), []).append(room)
@@ -267,19 +329,27 @@ async def quote_rooms(
                     (
                         start,
                         room["capacity"] or 99,
-                        _room_offer(listing, campus, host, room, day, zone, start, duration),
+                        _room_offer(
+                            listing, campus, host, room, day, zone, start, duration, category
+                        ),
                     )
                 )
     except ProviderError:
+        if wellness:
+            return _not_offered(listing, campus, duration / 60, "Live room times unavailable")
         return [page_offer(listing, campus, duration / 60, "Live times unavailable right now")]
     if not offers:
         reason = (
-            f"No room for {group} at {campus.get('school_name')} is open for "
+            f"No wellness room at {school} is open for {duration} minutes in that window"
+            if wellness
+            else f"No room for {group} at {campus.get('school_name')} is open for "
             f"{duration} minutes in that window"
         )
         return [
             {
-                **page_offer(listing, campus, duration / 60, "No open room in that window"),
+                **page_offer(
+                    listing, campus, duration / 60, "No open room in that window", category
+                ),
                 "available": False,
                 "unavailable_reason": reason,
             }
@@ -297,12 +367,14 @@ def _room_offer(
     zone: ZoneInfo,
     start: int,
     duration: int,
+    category: str = CATEGORY,
 ) -> dict[str, Any]:
     opens = datetime.combine(day, datetime.min.time(), zone) + timedelta(minutes=start)
     closes = opens + timedelta(minutes=duration)
     return _offer(
         listing,
         campus,
+        category,
         item_id=f"libcal-{room['lid']}-{room['gid']}-{room['eid']}",
         name=room["name"],
         hours=round(duration / 60, 2),

@@ -60,13 +60,14 @@ commit reference is accepted only when every hold in the round is a $0 Campus Ro
 
 ## 5. Reading the public web safely
 
-The Campus Researcher, Verification's housing link re-check, and Campus Rooms are the only parts
-that fetch web pages. The rules are in [resourcepilot/research.py](../resourcepilot/research.py)
+The Campus Researcher, Verification's housing link and events feed re-checks, and Campus Rooms
+are the only parts that fetch web pages. The rules are in [resourcepilot/research.py](../resourcepilot/research.py)
 and [resourcepilot/http.py](../resourcepilot/http.py):
 
 - **Hosts.** Only `https` on port 443, with no user info in the URL. The host must be the school's
   domain or one of its subdomains, or a known vendor: `libcal.com`, `emscloudservice.com`,
-  `25live.collegenet.com`, `skedda.com`, `robinpowered.com`, and the StarRez housing portals.
+  `25live.collegenet.com`, `skedda.com`, `robinpowered.com`, the StarRez housing portals, and
+  Localist calendars (`localist.com`).
 - **Addresses.** Before each fetch, every address the host resolves to must be publicly routable.
   Private, loopback, and link-local addresses are refused, so a school page cannot point the agent
   at an internal service.
@@ -77,7 +78,15 @@ and [resourcepilot/http.py](../resourcepilot/http.py):
 - **Untrusted content.** Page text is evidence only. The Researcher extracts links, link text, and
   booking-system fingerprints; it never follows instructions found on a page. A LibCal site found by
   the `<school>.libcal.com` probe must link back to the school, so another school's site is not
-  mistaken for yours.
+  mistaken for yours. The same holds for a `<school>.localist.com` calendar.
+- **Events feeds.** From a Localist feed the Researcher keeps only an event's title (80
+  characters, tags and control characters stripped), start time, location (60 characters), and
+  its calendar link, which must pass the same host rules. Descriptions are never read or shown.
+  These fields are display data and never instructions.
+- **Health.** The wellness form asks only for the school email, a day, and a duration. Nothing
+  about a student's health is asked, stored, or logged, and ResourcePilot books no health or
+  counseling appointments. The 988 and 911 crisis line is static text on every wellness card and
+  on the menu, so it shows even when nothing at the school can be found.
 - **Hosts from another agent.** Campus Rooms reads only a LibCal host that is on the school's own
   domain or `libcal.com`, even though the Researcher already checked it.
 - **Privacy.** Only the school domain of an email address is kept. The local part never reaches a
@@ -93,6 +102,9 @@ an arbitrary URL.
 - Campus Rooms is "verified" because it runs from this repository. The rooms are real, but
   ResourcePilot cannot see a school's booking rules (who may book, limits per day), so the student
   books on the school's site.
+- Wellness rooms and events come only from LibCal and Localist. A school that lists wellness
+  spaces elsewhere, or runs another calendar, shows none, and the keyword filter can include
+  events a school tags as wellness but a student would not.
 - The crawl recognizes common systems and booking words. A school whose library hides its booking
   system behind a sign-in or JavaScript-only navigation gets the paste-link card.
 - A production registry would add domain or business verification, signed listings, dispute

@@ -1,7 +1,7 @@
 """Bundle planning: combine one trusted offer per requested resource into budget-safe plans.
 
-A study-room search instead gets one option per open room, earliest first. A live room in a
-project bundle is a $0 handoff line: it adds no cost, no fee, and no walking time.
+A study- or wellness-room search instead gets one option per open room, earliest first. A live
+room in a project bundle is a $0 handoff line: it adds no cost, no fee, and no walking time.
 """
 
 from __future__ import annotations
@@ -11,6 +11,7 @@ from hashlib import sha256
 from itertools import product
 from typing import Any
 
+from resourcepilot.config import ROOM_SERVICES
 from resourcepilot.intake import ANCHORS, PRIORITIES
 from resourcepilot.logistics import walk_minutes
 from resourcepilot.pricing import totals, usd
@@ -178,8 +179,10 @@ def plan_room_options(
     usable = [
         offer
         for offer in _usable(offers, exclude_sellers, exclude_items)
-        if offer["category"] == "study_room"
+        if offer["category"] in brief["items"]
     ]
+    if not usable and brief.get("service") == "wellness":
+        return []
     if not usable:
         raise ValueError("No open room is left at your school for that time")
 
@@ -199,12 +202,12 @@ def planner_handler(payload: dict[str, Any], context: dict[str, Any]) -> dict[st
     brief = dict(payload["brief"])
     excluded = {str(seller) for seller in payload.get("exclude_sellers", [])}
     taken = {str(item) for item in payload.get("exclude_items", [])}
-    if brief.get("service") == "rooms":
+    if brief.get("service") in ROOM_SERVICES:
         options = plan_room_options(brief, list(payload.get("offers", [])), excluded, taken)
         return {
             **payload,
             "bundles": options,
-            "recommended_id": options[0]["bundle_id"],
+            "recommended_id": options[0]["bundle_id"] if options else "",
             "uncovered": [],
             "exclude_sellers": sorted(excluded),
         }
