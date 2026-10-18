@@ -33,7 +33,7 @@ from uagents_core.contrib.protocols.payment import (
     payment_protocol_spec,
 )
 
-from resourcepilot.cards import example_bundle_selection
+from resourcepilot.cards import card_buttons, example_bundle_selection
 
 load_dotenv()
 ORCHESTRATOR = os.environ["ORCHESTRATOR_ADDRESS"]
@@ -60,13 +60,12 @@ def next_selection(kind: str, payload: dict[str, Any]) -> dict[str, Any] | None:
     if kind == "detail" and payload.get("ctas"):
         first = dict(payload["ctas"][0]["selection"])
         return first if first.get("action") == "place_holds" else None
-    if kind == "review":
-        return dict(payload["approve_cta"]["selection"])
-    if kind == "custom" and payload.get("root", {}).get("title") == "Pay ResourcePilot escrow":
-        for child in payload["root"]["children"]:
-            selection = child.get("action", {}).get("selection", {})
-            if selection.get("payment_method") == "stripe_mock":
-                return dict(selection)
+    for _, selection in card_buttons(payload) if kind == "custom" else []:
+        # The holds review approves to the payment card, which offers Mock Stripe.
+        if selection.get("action") == "choose_payment":
+            return selection
+        if selection.get("payment_method") == "stripe_mock":
+            return selection
     return None
 
 

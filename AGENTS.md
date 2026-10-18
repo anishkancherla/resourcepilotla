@@ -51,6 +51,10 @@ official pages in [docs/official-links.md](docs/official-links.md) for anything 
   Keep `card_protocol_version="1"`, `requires_card_interaction="true"`, a supported
   `card_kind`, and a JSON `card_payload` of 64KB or less. Custom cards need a typed `root`
   and may be at most eight levels deep.
+- Give every card a picture from `assets/cards` through `cards.art()`. Keep image URLs https,
+  and keep every card valid with `CARD_IMAGE_BASE` empty. Forms and reviews are custom cards
+  because the predefined kinds cannot show images; keep their field names and selections
+  stable. Redraw art with `scripts/make_card_art.py` and keep `assets/PROMPTS.md` in step.
 - Put stable action, workflow, and bundle IDs in selections. Parse direct JSON first, then the
   bounded prose allowlist. Never infer a hold, payment, retry, or refund from ambiguous prose.
 

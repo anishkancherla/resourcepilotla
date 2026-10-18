@@ -1,5 +1,7 @@
 # ResourcePilot Seller Discovery
 
+<img src="https://raw.githubusercontent.com/kevinjylin/resourcepilotla/main/assets/avatars/discovery.jpg" alt="ResourcePilot Seller Discovery" width="160">
+
 Finds seller agents for a brief and collects quotes from them over the ResourceHold protocol. It
 asks every seller in ResourcePilot's registry that sells a requested category, including Campus
 Rooms for study rooms. It can optionally search the Almanac for other agents that publish the

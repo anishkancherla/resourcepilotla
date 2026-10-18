@@ -9,7 +9,7 @@ from types import ModuleType
 from uuid import uuid4
 
 import pytest
-from network import USER
+from network import USER, click, has_action, last_with
 from provider_fakes import SEARCH_DAY
 from uagents_core.contrib.protocols.chat import ChatMessage, MetadataContent, TextContent
 from uagents_core.contrib.protocols.payment import (
@@ -124,8 +124,8 @@ async def hold_first_bundle(network) -> None:
 
 
 async def request_payment(network, method: str) -> RequestPayment:
-    _, review, _ = last_card(network, "review")
-    await network.send_user(chat(review["approve_cta"]["selection"]))
+    _, review, _ = last_with(network, "choose_payment")
+    await network.send_user(chat(click(review, "choose_payment")))
     _, options, _ = last_card(network, "custom")
     buttons = [child for child in options["root"]["children"] if child["type"] == "button"]
     choice = next(
@@ -160,7 +160,7 @@ def terminal_flags(network) -> list[str]:
 
 async def test_mock_stripe_checkout_books_every_seller_exactly_once(network) -> None:
     await hold_first_bundle(network)
-    narration = last_card(network, "review")[2]
+    narration = last_with(network, "choose_payment")[2]
     assert "holding" in narration
     holds = list(network.store.holds.values())
     assert holds and {hold["status"] for hold in holds} == {"held"}
@@ -285,7 +285,7 @@ async def test_test_fet_is_verified_on_chain_before_booking(network, monkeypatch
 async def test_one_declined_hold_releases_the_rest_and_charges_nothing(network) -> None:
     await network.store.set_fault_mode("studio_rooms", "reject_holds")
     await hold_first_bundle(network)
-    assert not [card for card in network.cards() if card[0] == "review"]
+    assert not [card for card in network.cards() if has_action(card, "choose_payment")]
     assert any("Hilltop Studio Rooms could not hold" in text for text in network.texts())
     kind, _, narration = last_card(network)
     assert kind == "carousel"
@@ -454,8 +454,8 @@ async def test_free_room_checkout_on_postgres(postgres_network) -> None:
     await network.send_user(chat(carousel["items"][0]["primary_cta"]["selection"]))
     _, detail, _ = last_card(network, "detail")
     await network.send_user(chat(detail["ctas"][0]["selection"]))
-    _, review, _ = last_card(network, "review")
-    await network.send_user(chat(review["approve_cta"]["selection"]))
+    _, review, _ = last_with(network, "confirm_free")
+    await network.send_user(chat(click(review, "confirm_free")))
     assert last_card(network, "detail")[1]["title"] == "Your booking link"
     state = await network.store.get_workflow(workflow_id)
     assert state["status"] == "booked"

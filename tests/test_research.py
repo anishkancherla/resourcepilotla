@@ -235,6 +235,9 @@ async def test_wellness_events_are_filtered_capped_and_kept_as_plain_data() -> N
     ]
     flu = found["events"][0]
     assert flu["url"] == "https://events.purdue.edu/event/1"
+    # Photos are kept only from Localist's image host or the school; a tracker is dropped.
+    assert flu["photo"] == "https://localist-images.azureedge.net/photos/1/huge/flu.jpg"
+    assert found["events"][1]["photo"] == ""
     assert flu["location"] == "PUSH Building"
     assert flu["when"].endswith("10 AM")
     assert "\u00b7" not in found["events"][2]["when"]  # all day: no time

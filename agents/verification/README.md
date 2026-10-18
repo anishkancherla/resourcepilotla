@@ -1,5 +1,7 @@
 # ResourcePilot Seller Verification
 
+<img src="https://raw.githubusercontent.com/kevinjylin/resourcepilotla/main/assets/avatars/verification.jpg" alt="ResourcePilot Seller Verification" width="160">
+
 Decides which quotes ResourcePilot is willing to show a student. Each quote must pass:
 
 - identity: the sender matches the registry and the listing is verified;

@@ -270,7 +270,12 @@ async def handle_chat(ctx: Context, sender: str, message: ChatMessage) -> None:
             ctx,
             sender,
             f"I am the {ROLE.name}. {ROLE.responsibility}. Chat with the Orchestrator to book.",
-            cards.status_card(ROLE.name, ROLE.responsibility, ADDRESSES["orchestrator"]),
+            cards.status_card(
+                ROLE.name,
+                ROLE.responsibility,
+                ADDRESSES["orchestrator"],
+                image=cards.agent_art(ROLE.key),
+            ),
         )
         return
     await _orchestrator_chat(ctx, sender, text, cards.parse_selection(text))
@@ -287,13 +292,18 @@ FIELD_LIMIT = 200
 
 
 def _form_fields(selection: dict[str, Any]) -> dict[str, Any]:
-    """Bounded scalar fields from a form submission, with any email reduced to its domain."""
-    fields = {
-        str(key)[:40]: str(value)[:FIELD_LIMIT] if isinstance(value, str) else value
-        for key, value in selection.items()
-        if key not in {"action", "selection", "service"}
-        and isinstance(value, str | int | float | bool)
-    }
+    """Bounded scalar fields from a form submission, with any email reduced to its domain.
+
+    A picture-tile pick (``choice_grid``) may arrive as a one-item list; it is unwrapped.
+    """
+    fields = {}
+    for key, raw in selection.items():
+        value = raw[0] if isinstance(raw, list) and len(raw) == 1 else raw
+        if key in {"action", "selection", "service"} or not isinstance(
+            value, str | int | float | bool
+        ):
+            continue
+        fields[str(key)[:40]] = str(value)[:FIELD_LIMIT] if isinstance(value, str) else value
     return scrub_fields(fields)
 
 

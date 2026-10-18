@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from network import SESSION
+from network import SESSION, click, last_with
 from test_checkout import (
     chat,
     hold_first_bundle,
@@ -66,13 +66,13 @@ async def test_silent_seller_is_rerouted_around_and_the_new_bundle_books(network
 
 async def test_retry_after_a_failed_commit_reuses_the_escrowed_payment(network) -> None:
     request = await paid_but_commit_failed(network)
-    _, recovery, narration = last_card(network, "review")
-    assert recovery["title"] == "Booking did not complete"
+    _, recovery, narration = last_with(network, "retry_booking")
+    assert recovery["root"]["title"] == "Booking did not complete"
     assert "safe in escrow" in narration
     assert network.store.payments[request.reference]["status"] == "released"
 
     await network.store.set_fault_mode("studio_rooms", "none")
-    await network.send_user(chat(recovery["approve_cta"]["selection"]))
+    await network.send_user(chat(click(recovery, "retry_booking")))
     assert workflow(network)["status"] == "booked"
     assert len(payment_requests(network)) == 1  # the buyer never pays twice
     assert network.store.payments[request.reference]["status"] == "delivered"
@@ -83,8 +83,8 @@ async def test_retry_after_a_failed_commit_reuses_the_escrowed_payment(network) 
 
 async def test_buyer_can_take_a_refund_after_a_failed_commit(network) -> None:
     request = await paid_but_commit_failed(network)
-    _, recovery, _ = last_card(network, "review")
-    await network.send_user(chat(recovery["reject_cta"]["selection"]))
+    _, recovery, _ = last_with(network, "refund")
+    await network.send_user(chat(click(recovery, "refund")))
 
     _, refund, narration = last_card(network, "detail")
     assert refund["title"] == "Refunded"
@@ -95,7 +95,7 @@ async def test_buyer_can_take_a_refund_after_a_failed_commit(network) -> None:
     assert [entry["kind"] for entry in entries] == ["refund"]
     assert entries[0]["transaction_id"].startswith("STRIPE_MOCK_REFUND:")
 
-    await network.send_user(chat(recovery["reject_cta"]["selection"]))
+    await network.send_user(chat(click(recovery, "refund")))
     assert "not available" in network.texts()[-1]
     assert len(network.store.escrow) == 1
 
@@ -139,7 +139,7 @@ async def test_checkout_coordinator_outage_during_booking_keeps_the_payment(netw
     assert workflow(network)["status"] == "booking_failed"
     assert network.store.payments[request.reference]["status"] == "released"
     assert network.store.escrow == {}
-    assert last_card(network)[1]["title"] == "Booking did not complete"
+    assert last_card(network)[1]["root"]["title"] == "Booking did not complete"
 
 
 async def test_late_success_after_the_workflow_moved_on_is_released(network) -> None:

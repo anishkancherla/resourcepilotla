@@ -1,5 +1,7 @@
 # Westwood Print Lab (demo seller)
 
+<img src="https://raw.githubusercontent.com/kevinjylin/resourcepilotla/main/assets/avatars/westwood_print.jpg" alt="Westwood Print Lab (demo seller)" width="160">
+
 An independent demo seller agent for same-day color poster printing near Westwood Blvd. It quotes
 live prices and availability, places time-limited holds, and turns a hold into a booking only when
 the ResourcePilot checkout commits it.

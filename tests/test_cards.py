@@ -121,9 +121,10 @@ def _metadata(message):
 
 FACTORIES = [
     (cards.welcome_card, "custom"),
-    (lambda: cards.rooms_form(upcoming_days(NOW)), "form"),
-    (cards.housing_form, "form"),
-    (lambda: cards.bundle_form(upcoming_days(NOW)), "form"),
+    (lambda: cards.rooms_form(upcoming_days(NOW)), "custom"),
+    (lambda: cards.wellness_form(upcoming_days(NOW)), "custom"),
+    (cards.housing_form, "custom"),
+    (lambda: cards.bundle_form(upcoming_days(NOW)), "custom"),
     (lambda: cards.room_link_card("workflow-1", "MIT", "rooms"), "custom"),
     (lambda: cards.room_link_card("workflow-1", "MIT", "bundle"), "custom"),
     (lambda: cards.progress_card("workflow-1", "researcher", ("intake", "researcher")), "custom"),
@@ -132,8 +133,8 @@ FACTORIES = [
     (lambda: cards.bundle_detail("workflow-1", brief(), BUNDLE, checkout=True), "detail"),
     (lambda: cards.bundle_detail("workflow-1", ROOM_BRIEF, ROOM_OPTION, checkout=True), "detail"),
     (lambda: cards.vetting_card("workflow-1", REJECTIONS), "detail"),
-    (lambda: cards.holds_review_card("workflow-1", brief(), BUNDLE, later(600)), "review"),
-    (lambda: cards.holds_review_card("workflow-1", ROOM_BRIEF, ROOM_OPTION, later(60)), "review"),
+    (lambda: cards.holds_review_card("workflow-1", brief(), BUNDLE, later(600)), "custom"),
+    (lambda: cards.holds_review_card("workflow-1", ROOM_BRIEF, ROOM_OPTION, later(60)), "custom"),
     (lambda: cards.payment_options_card("workflow-1", 957, "0.000095"), "custom"),
     (
         lambda: cards.receipt_card(brief(), BUNDLE, BOOKINGS, {"currency": "USD"}, LEDGER),
@@ -141,7 +142,7 @@ FACTORIES = [
     ),
     (lambda: cards.receipt_card(ROOM_BRIEF, ROOM_OPTION, [ROOM_BOOKING], {}, []), "detail"),
     (lambda: cards.housing_card(HOUSING), "detail"),
-    (lambda: cards.recovery_card("workflow-1", "A seller failed", 957, later(600)), "review"),
+    (lambda: cards.recovery_card("workflow-1", "A seller failed", 957, later(600)), "custom"),
     (
         lambda: cards.refund_card({"currency": "USD"}, {**LEDGER[0], "kind": "refund"}),
         "detail",
@@ -150,7 +151,13 @@ FACTORIES = [
     (lambda: cards.bookings_card(PAST_BOOKINGS), "detail"),
     (lambda: cards.error_card("Something failed", service="rooms"), "custom"),
     (lambda: cards.notice_card("Saved", "Your link was checked.", badge="Done"), "custom"),
-    (lambda: cards.status_card("Planner", "Builds bundles", "agent1qorch"), "custom"),
+    (
+        lambda: cards.status_card(
+            "Planner", "Builds bundles", "agent1qorch", image=cards.agent_art("planner")
+        ),
+        "custom",
+    ),
+    (lambda: cards.wellness_card("workflow-1", {"school": {"school_name": "Test U"}}), "custom"),
 ]
 
 
@@ -237,18 +244,21 @@ def test_services_menu_opens_each_service_and_bookings() -> None:
 @pytest.mark.parametrize("service", ["rooms", "wellness", "housing", "bundle"])
 def test_every_form_submits_its_own_service(service) -> None:
     _, form = cards.service_form(service)
-    for field in form["fields"]:
-        if field["kind"] == "select":
+    fields = cards.card_inputs(form)
+    for field in fields:
+        if field.get("kind") == "select":
             assert field["options"]
-    assert form["submit_cta"]["selection"] == {"action": "submit_form", "service": service}
-    email = [field for field in form["fields"] if field["name"] == "email"]
+    assert [sel for _, sel in cards.card_buttons(form)] == [
+        {"action": "submit_form", "service": service}
+    ]
+    email = [field for field in fields if field["name"] == "email"]
     assert len(email) == 1
     assert email[0].get("required", False) is (service != "bundle")
 
 
 def test_demo_bundle_is_labeled_as_demo_shops() -> None:
     _, form = cards.bundle_form()
-    assert form["title"].startswith("Demo bundle")
+    assert form["root"]["title"].startswith("Demo bundle")
     _, carousel = cards.bundle_carousel("workflow-1", [BUNDLE], 0)
     assert carousel["title"].startswith("Demo bundles")
 
@@ -320,11 +330,9 @@ def test_custom_card_depth_limit() -> None:
 
 def test_checkout_cards_carry_ids_and_honest_payment_labels() -> None:
     _, review = cards.holds_review_card("workflow-1", brief(), BUNDLE, later(600))
-    assert review["approve_cta"]["selection"] == {
-        "action": "choose_payment",
-        "workflow_id": "workflow-1",
-    }
-    assert review["reject_cta"]["selection"]["action"] == "release_holds"
+    approve, reject = (selection for _, selection in cards.card_buttons(review))
+    assert approve == {"action": "choose_payment", "workflow_id": "workflow-1"}
+    assert reject["action"] == "release_holds"
     assert "No money moves until you pay" in json.dumps(review)
 
     _, options = cards.payment_options_card("workflow-1", 957, None)
@@ -344,7 +352,7 @@ def test_checkout_cards_carry_ids_and_honest_payment_labels() -> None:
 
 def test_free_room_cards_never_ask_for_payment() -> None:
     _, review = cards.holds_review_card("workflow-1", ROOM_BRIEF, ROOM_OPTION, later(60))
-    assert review["approve_cta"]["selection"] == {
+    assert cards.card_buttons(review)[0][1] == {
         "action": "confirm_free",
         "workflow_id": "workflow-1",
     }
@@ -393,10 +401,88 @@ def test_wellness_card_always_carries_the_crisis_line() -> None:
     assert "No public room-booking system found for Test U" in encoded
     assert "No public events calendar found for Test U" in encoded
     _, form = cards.wellness_form()
-    assert cards.CRISIS_TEXT in form["title"]
-    assert {field["name"] for field in form["fields"]} == {"email", "day", "window", "duration"}
+    assert form["root"]["children"][1]["value"] == cards.CRISIS_TEXT  # before the picture
+    names = {field["name"] for field in cards.card_inputs(form)}
+    assert names == {"email", "day", "window", "duration"}
 
 
 def test_wellness_prose_only_opens_the_form() -> None:
     for text in ("any wellness events?", "I need a meditation space", "flu shot near me"):
         assert cards.parse_selection(text) == {"action": "open_service", "service": "wellness"}
+
+
+def _image_urls(node) -> list[str]:
+    urls = []
+    if isinstance(node, dict):
+        for key in ("src", "image", "hero_image"):
+            if isinstance(node.get(key), str):
+                urls.append(node[key])
+        for value in node.values():
+            urls.extend(_image_urls(value))
+    elif isinstance(node, list):
+        for value in node:
+            urls.extend(_image_urls(value))
+    return urls
+
+
+def test_every_art_name_has_a_committed_image_and_every_agent_an_avatar() -> None:
+    from resourcepilot.config import ALL_AGENTS
+
+    for name in cards.ART:
+        assert (ROOT / "assets" / "cards" / f"{name}.jpg").is_file(), name
+    for identity in ALL_AGENTS:
+        assert cards.agent_art(identity.key) in cards.ART
+        assert (ROOT / "assets" / "avatars" / f"{identity.key}.jpg").is_file(), identity.key
+
+
+@pytest.mark.parametrize(("factory", "kind"), FACTORIES)
+def test_every_card_has_a_picture_from_the_repository(factory, kind) -> None:
+    _, payload = factory()
+    urls = _image_urls(payload)
+    assert urls, "every card carries at least one image"
+    for url in urls:
+        assert url.startswith(cards.DEFAULT_IMAGE_BASE + "cards/"), url
+        name = url.rsplit("/", 1)[1].removesuffix(".jpg")
+        assert (ROOT / "assets" / "cards" / f"{name}.jpg").is_file(), name
+
+
+@pytest.mark.parametrize(("factory", "kind"), FACTORIES)
+def test_cards_stay_valid_with_images_turned_off(factory, kind, monkeypatch) -> None:
+    monkeypatch.setenv("CARD_IMAGE_BASE", "")
+    actual_kind, payload = factory()
+    cards.card_message("x", actual_kind, payload)
+    assert _image_urls(payload) == []
+
+
+def test_menu_is_a_picture_grid_and_bundle_choices_are_picture_tiles() -> None:
+    _, menu = cards.welcome_card()
+    rows = [child for child in menu["root"]["children"] if child.get("direction") == "row"]
+    assert [len(row["children"]) for row in rows] == [2, 2, 1]
+    assert all(tile["children"][0]["type"] == "image" for row in rows for tile in row["children"])
+    _, form = cards.bundle_form()
+    grids = [field for field in cards.card_inputs(form) if field["type"] == "choice_grid"]
+    assert [grid["name"] for grid in grids] == ["camera", "room"]
+    assert all(choice["image"].endswith(".jpg") for grid in grids for choice in grid["choices"])
+
+
+def test_event_photos_come_from_the_feed_and_fall_back_to_art() -> None:
+    photo = "https://localist-images.azureedge.net/photos/1/huge/x.jpg"
+    data = {
+        "school": {"school_name": "Test U"},
+        "wellness": {
+            "status": "found",
+            "events": [
+                {
+                    "title": "Flu clinic",
+                    "when": "Mon",
+                    "url": "https://events.x.edu/1",
+                    "photo": photo,
+                },
+                {"title": "Yoga", "when": "Tue", "url": "https://events.x.edu/2", "photo": ""},
+            ],
+        },
+    }
+    _, card = cards.wellness_card("workflow-1", data)
+    urls = _image_urls(card)
+    assert photo in urls
+    assert cards.art("event-default") in urls

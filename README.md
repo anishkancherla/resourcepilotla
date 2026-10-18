@@ -47,6 +47,23 @@ at your school to a bundle; it rides along outside escrow.
 This repository uses public Fetch.ai packages and documentation only. The five demo sellers are
 demo businesses with illustrative catalogs, not real shops.
 
+## What it looks like
+
+![ResourcePilot campus services](assets/cards/menu-banner.jpg)
+
+Every reply in ASI:One is a picture card:
+- The menu is a grid of picture tiles, like the Welcome Week hubs.
+- Each form has a picture of its service. The bundle form picks a camera and a room from picture
+  tiles.
+- Progress cards show the agent at work.
+- Rooms, bundles, holds, payment, receipts, recovery, refunds and vetting each have their own art.
+- Wellness events show the event's own photo from the school's calendar.
+
+The art is drawn in code by `scripts/make_card_art.py` and served from this public repository.
+[assets/PROMPTS.md](assets/PROMPTS.md) has an image prompt for each picture, so you can swap in
+generated art under the same file names. `CARD_IMAGE_BASE` points at your fork, or leave it empty
+to send cards without images.
+
 ## Start here
 
 Prerequisites: Docker Desktop, Python 3.11–3.13, and
@@ -181,6 +198,7 @@ make build              # build the Docker image
 make stop
 ```
 
+`uv run python scripts/make_card_art.py` redraws the card art (it needs Chrome).
 `uv run python scripts/print_cards.py purdue.edu` prints every card payload, validated exactly as
 the agents send it. With school domains, it runs the real Researcher and Campus Rooms quote
 against public pages, including the wellness card's rooms and events.

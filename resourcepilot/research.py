@@ -63,6 +63,8 @@ VENDORS: dict[str, str] = {
 }
 HOUSING_VENDORS = ("starrezhousing.com", "starrez.com")
 EVENT_VENDORS = ("localist.com",)
+# Event photos are shown by the student's browser, never fetched by ResourcePilot.
+EVENT_IMAGE_HOSTS = ("localist-images.azureedge.net",)
 EVENT_HOSTS = ("events.{d}", "calendar.{d}")
 LOCALIST_EVENTS = "/api/2/events"
 EVENT_DAYS = 7
@@ -807,6 +809,17 @@ def _filter_names(filters: Any) -> list[str]:
     return names
 
 
+def event_photo(value: Any, domain: str) -> str:
+    """An event's photo URL if it is https on the school or Localist's image host, else ""."""
+    url = str(value or "")
+    parts = urlsplit(url)
+    host = str(parts.hostname or "")
+    allowed = on_domain(host, domain) or any(on_domain(host, h) for h in EVENT_IMAGE_HOSTS)
+    if len(url) > 400 or parts.scheme != "https" or parts.port or parts.username or not allowed:
+        return ""
+    return url
+
+
 def wellness_event(raw: Any, domain: str, zone: ZoneInfo, first_day: date) -> dict[str, str] | None:
     """One health or wellness event from a Localist feed item, or None."""
     event = raw.get("event") if isinstance(raw, dict) else None
@@ -839,6 +852,7 @@ def wellness_event(raw: Any, domain: str, zone: ZoneInfo, first_day: date) -> di
         when += f" \u00b7 {start:%-I:%M %p}".replace(":00", "")
     return {
         "event_id": _plain(event.get("id"), 20),
+        "photo": event_photo(event.get("photo_url"), domain),
         "title": title,
         "starts_at": start.isoformat(),
         "when": when,
@@ -878,7 +892,7 @@ async def wellness_research(http: Http, school: dict[str, str], day: str) -> dic
     out: dict[str, Any] = {**feed, "day": day, "events": []}
     if feed["status"] != "found":
         return out
-    cache_key = f"research:events-list:{feed['feed_host']}:{day}:v1"
+    cache_key = f"research:events-list:{feed['feed_host']}:{day}:v2"
     if http.cache is not None:
         cached = await http.cache.cache_get(cache_key)
         if isinstance(cached, list):
