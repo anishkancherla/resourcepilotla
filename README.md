@@ -9,7 +9,7 @@ short forms, with a card for every reply.
 | **Study rooms** | Real open library study rooms at your school, re-checked live, then a free booking link. You book with your own sign-in. | Live: your school's LibCal, found by the Campus Researcher |
 | **Health & wellness** | Open meditation, reflection, and sensory rooms at your school, the week's health and wellness events with RSVP links, and the 988 crisis line on every card | Live: your school's LibCal and its public Localist events calendar |
 | **Campus housing** | Every on-campus hall your school lists, with its photo, style, who it's for, features, and listed price, matched to what you need, plus IPEDS facts and the apply link. The facts are free; the hall match can be a paid step (Stripe test mode or testnet FET) | Live: the school's own housing pages plus IPEDS |
-| **Emergency (demo)** | A demo-drill phone call that describes an emergency to your team's demo contact, never 911, then the call's summary and transcript | ElevenLabs voice agent over your own Twilio number or SIP trunk (e.g. Telnyx) |
+| **Emergency (demo)** | A demo-drill phone call in which the voice, speaking as the student, reports an emergency to your team's demo contact, never 911, then the call's summary and transcript | ElevenLabs voice agent over your own Twilio number or SIP trunk (e.g. Telnyx) |
 | **My bookings** | Your recent re-checked rooms and their booking links | ResourcePilot's workflow records |
 
 Study rooms work for **any US school**, not only one campus. The first card asks for your school

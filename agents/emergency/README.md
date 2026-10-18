@@ -14,7 +14,10 @@ whether they are safe, and an optional school name.
 2. **Call.** **Call now** is claimed once per workflow by the Orchestrator, which then sends a
    `phase="call"` task. This agent also claims the call once per workflow and asks an ElevenLabs
    voice agent to phone one pre-configured demo contact (a teammate playing the dispatcher) over
-   Twilio or a SIP trunk (such as Telnyx) and describe the emergency out loud. Put that phone on speaker for the demo.
+   Twilio or a SIP trunk (such as Telnyx). The voice plays the caller: it speaks for the student,
+   reports what happened, where, how many people need help, and whether they are safe, answers
+   the dispatcher's questions from the form only, and hangs up once the dispatcher has what they
+   need. Put that phone on speaker for the demo.
 3. **Check the call.** A `phase="status"` task reads the call's status, duration, summary, and
    transcript from ElevenLabs, and the Orchestrator shows them on a card.
 
@@ -57,24 +60,16 @@ Protocols: Agent Chat Protocol, ResourcePilotTasks.
    password). Copy its phone number ID.
 3. **ElevenLabs → Agents → create an agent:**
    - Pick a calm, clear voice.
-   - Under **Security**, turn on the override for **First message**. ResourcePilot sets the
-     opening line so it always starts with the demo notice.
-   - Keep conversations short (a maximum duration of about 3 minutes).
-   - System prompt:
-
-     ```text
-     You are ResourcePilot's automated emergency reporting assistant, calling a dispatcher
-     during a demo drill for a student at {{school}}. {{demo_notice}}
-     Report the incident clearly and calmly:
-     - What: {{emergency_type}}
-     - Where: {{location}}
-     - People who need help: {{people}}
-     - Details from the student: {{details}}
-     - The student says they are safe right now: {{caller_safe}}
-     Answer the dispatcher's questions using only these facts. If you don't know something,
-     say so. Never invent names, injuries, or addresses. Keep each answer to one or two
-     sentences. When the dispatcher has what they need, thank them and end the call.
-     ```
+   - Under **Security**, turn on the overrides for **System prompt** and **First message**.
+     ResourcePilot sends both with every call: the opening line always starts with the demo
+     notice, and the prompt casts the voice as the caller asking for help, built from the
+     student's form. Whatever prompt you type in the dashboard is replaced for these calls.
+   - Under **Tools → System tools**, make sure **End call** is on (agents made in the dashboard
+     have it by default; agents made through the API don't). Without it the voice can't hang
+     up, and the call stays open until the other side hangs up or the time limit runs out.
+   - Keep conversations short: set the maximum duration to about 3 minutes, and a silence
+     timeout so a quiet line ends on its own.
+   - The dashboard's system prompt can be anything short, since it's replaced on each call.
 
 4. **Add these to `.env`** (never commit it). The Dispatcher's own `EMERGENCY_SEED`,
    `EMERGENCY_ADDRESS`, and `EMERGENCY_PORT` (8007) come from bootstrap:

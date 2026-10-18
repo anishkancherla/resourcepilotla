@@ -90,8 +90,9 @@ Put your teammate's phone on speaker, near the microphone. Press **Main menu**, 
 (demo)**. Pick a kind (for example fire or smoke), enter where on campus and how many people, and
 submit the form. On the review card, point at "not 911" and the masked number, which shows only
 the last four digits. Say: "It can only call our demo contact, and the voice opens by saying this
-is a demo drill." Press **Call now**. The phone rings, the voice describes the emergency, and your
-teammate answers as the dispatcher. After the call, press **Check the call** to show the summary
+is a demo drill." Press **Call now**. The phone rings, and the voice reports the emergency as the
+student asking for help. Your teammate answers as the dispatcher and asks a question or two; the
+voice answers from the form, then thanks them and hangs up. After the call, press **Check the call** to show the summary
 and transcript. Say: "One press places one call, and it is never retried. In a real emergency,
 call 911."
 
