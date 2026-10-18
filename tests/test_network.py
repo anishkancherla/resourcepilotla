@@ -27,6 +27,10 @@ def last_card(network, kind: str | None = None) -> tuple[str, dict, str]:
     return found[-1]
 
 
+def item_by_id(carousel: dict, item_id: str) -> dict:
+    return next(item for item in carousel["items"] if item["id"] == item_id)
+
+
 def completed_roles(network) -> list[str]:
     events = next(iter(network.store.events.values()))
     return [e["details"].get("role") for e in events if e["event_type"] == "specialist_completed"]
@@ -147,7 +151,7 @@ async def test_study_room_flow_ends_in_a_free_booking_link(network) -> None:
         "planner",
     ]
     # Both rooms open at noon; the 2-seat room is the snuggest fit for a group of 2.
-    assert [item["title"] for item in carousel["items"]] == ["WALC 3138", "HSSE 2101"]
+    assert [item["title"] for item in carousel["items"]] == ["WALC 3138", "HSSE 2101", "Main menu"]
     assert "Live · LibCal" in [badge["label"] for badge in carousel["items"][0]["badges"]]
     assert recheck_cta(detail)["label"] == "Re-check this room"
     assert detail["hero_image"] == carousel["items"][0]["image"]  # the same room picture
@@ -182,7 +186,7 @@ async def test_room_taken_during_recheck_goes_back_to_the_other_rooms(network) -
     assert any("just booked" in text for text in network.texts())
     kind, carousel, _ = last_card(network)
     assert kind == "carousel"
-    assert [item["title"] for item in carousel["items"]] == ["HSSE 2101"]
+    assert [item["title"] for item in carousel["items"]] == ["HSSE 2101", "Main menu"]
     state = next(iter(network.store.workflows.values()))
     assert state["status"] == "awaiting_selection"
     assert state["data"]["exclude_items"] == ["libcal-9-7-102"]
@@ -340,6 +344,7 @@ async def test_housing_shows_each_hall_matched_to_the_criteria(network) -> None:
         "Cary Quadrangle",
         "Show all 4 halls",
         "Housing facts and how to apply",
+        "Main menu",
     ]
     earhart, cary = carousel["items"][0], carousel["items"][1]
     assert earhart["badges"][0] == {"label": "Matches", "variant": "success"}
@@ -376,7 +381,7 @@ async def test_housing_shows_each_hall_matched_to_the_criteria(network) -> None:
     assert by_title["Meredith South"]["image"] == cards.art("hall-default")
     assert "attacker" not in json.dumps(network.cards())
 
-    await network.send_user(chat(carousel["items"][-1]["primary_cta"]["selection"]))
+    await network.send_user(chat(item_by_id(carousel, "housing_facts")["primary_cta"]["selection"]))
     _, facts, _ = last_card(network, "detail")
     assert facts["title"].startswith("Housing at Purdue")
     assert next(iter(network.store.workflows.values()))["status"] == "answered"
@@ -394,7 +399,7 @@ async def test_school_without_readable_halls_gets_facts_and_links(network) -> No
 async def test_housing_flow_shows_facts_and_rechecked_links(network) -> None:
     await submit(network, housing_form())
     _, carousel, _ = last_card(network, "carousel")
-    await network.send_user(chat(carousel["items"][-1]["primary_cta"]["selection"]))
+    await network.send_user(chat(item_by_id(carousel, "housing_facts")["primary_cta"]["selection"]))
     _, card, _ = last_card(network, "detail")
     assert card["title"] == "Housing at Purdue University-Main Campus · West Lafayette, IN"
     rows = {row["label"]: row["value"] for row in card["summary_rows"]}
@@ -428,7 +433,8 @@ async def test_specialists_answer_profile_chats(network) -> None:
         await network.send_user(chat("hello"), to=key)
         kind, payload, _ = last_card(network)
         assert kind == "custom"
-        assert payload["root"]["children"][0]["src"] == cards.art(cards.agent_art(key))
+        header = payload["root"]["children"][0]
+        assert header["children"][0]["src"] == cards.art(cards.agent_art(key))
         buttons = [c for c in payload["root"]["children"] if c["type"] == "button"]
         assert buttons[0]["action"]["selection"]["action"] == "open_orchestrator"
 
@@ -566,7 +572,7 @@ async def test_emergency_without_setup_explains_and_calls_no_one(network, monkey
 async def test_a_picture_tile_pick_sent_as_a_one_item_list_is_unwrapped(network) -> None:
     await submit(network, rooms_form(window=["afternoon"], duration=["60"]))
     _, carousel, _ = last_card(network, "carousel")
-    assert [item["title"] for item in carousel["items"]] == ["WALC 3138", "HSSE 2101"]
+    assert [item["title"] for item in carousel["items"]] == ["WALC 3138", "HSSE 2101", "Main menu"]
     second = carousel["items"][1]
     await network.send_user(chat(second["primary_cta"]["selection"]))
     _, detail, _ = last_card(network, "detail")

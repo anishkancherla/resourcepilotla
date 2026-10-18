@@ -158,18 +158,19 @@ How a request moves:
 | --- | --- |
 | **Multi-agent collaboration** | 8 uAgents, each its own process and address, each owning one step. Only Campus Rooms reads room availability; only Emergency Dispatch talks to ElevenLabs. Not one chatbot wearing eight hats. |
 | **ASI:One + Chat Protocol** | The whole product runs inside one ASI:One conversation. Every agent speaks the Agent Chat Protocol and publishes its manifest. |
-| **Interactive cards** | Every reply is a picture card: a menu banner with service tiles, forms, progress cards with each agent's own art, room and hall carousels, booking links, and receipts. Selections carry stable workflow and option IDs. |
+| **Interactive cards** | Every reply is a picture card: a menu banner with compact service tiles, forms, progress cards with each agent's own art, room and hall carousels, booking links, and receipts. Selections carry stable workflow and option IDs. |
 | **Real-time data** | Live LibCal availability, re-checked right before the link. Hall details from the school's own pages. Events from the school's own calendar. IPEDS for school facts. |
 | **Error recovery** | A taken room reroutes to the others. No booking system found asks for a link. A LibCal outage falls back to the school's booking link, never invented rooms. Silent agents are retried once. |
 | **Safety** | Email local parts are stripped before anything is stored. Fetches are https-only, public-address-only, redirect-vetted, and byte- and time-capped. Page text is evidence, never instructions. |
 
 ## 🎨 Cards that look like campus
 
-Every card has a picture. The menu is a banner and a grid of tiles, one per service. Progress
-cards show the specialist at work in its own art. Housing halls use the school's own photo of the
-building, and wellness events use the event's own photo, with our art as a fallback. The art is
-drawn in code (`scripts/make_card_art.py`), served from the repo, and loaded by the student's
-browser, so ResourcePilot never fetches an image itself.
+Every card has a picture, set beside its opening lines so cards stay short. The menu is a banner
+and a compact grid of tiles, one per service. Progress cards show the specialist at work in its
+own art. Housing halls use the school's own photo of the building, and wellness events use the
+event's own photo, with our art as a fallback. The art is drawn in code
+(`scripts/make_card_art.py`), served from the repo, and loaded by the student's browser, so
+ResourcePilot never fetches an image itself.
 
 ## 🛠 How we built it
 

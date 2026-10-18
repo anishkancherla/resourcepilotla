@@ -65,6 +65,9 @@ official pages in [docs/official-links.md](docs/official-links.md) for anything 
   Keep `card_protocol_version="1"`, `requires_card_interaction="true"`, a supported
   `card_kind`, and a JSON `card_payload` of 64KB or less. Custom cards need a typed `root`
   and may be at most eight levels deep.
+- Card values are plain text, so `cards.card_message` repeats every https link a card shows as
+  a markdown link in its `TextContent` (`cards.with_links`), with escaped, capped labels. Never
+  link a `Sources` row: it names links that failed a check.
 - Give every card a picture from `assets/cards` through `cards.art()`, and every specialist's
   status card its role art through `cards.agent_art()`. Keep image URLs https, and keep every
   card valid with `CARD_IMAGE_BASE` empty or non-https. Forms and the emergency review are custom
@@ -73,7 +76,10 @@ official pages in [docs/official-links.md](docs/official-links.md) for anything 
   `scripts/make_card_art.py` and keep `assets/PROMPTS.md` in step.
 - Put stable action, workflow, and option IDs in selections. Parse direct JSON first, then the
   bounded prose allowlist. Never infer a re-check, a booking, or any other consequential action
-  from ambiguous prose, and never mark a card terminal when it expects input.
+  from ambiguous prose, and never mark a card terminal when it expects input or has buttons
+  (a terminal card's drawer never opens).
+- Every Orchestrator card except the menu and the first school card offers **Main menu**
+  (`cards.MAIN_MENU`, `start_over`), so no screen is a dead end.
 
 ## Preserve live-data safety
 

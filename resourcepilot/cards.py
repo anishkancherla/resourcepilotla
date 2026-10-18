@@ -92,6 +92,8 @@ STAGE_ART = {
 }
 # An event's own photo URL is shown only when it is this short; the student's browser loads it.
 MAX_PHOTO_URL = 400
+# The wellness card lists this many events, so it stays short; the rest are counted.
+CARD_EVENTS = 5
 
 PREDEFINED_FIELDS = {
     "carousel": {"title", "subtitle", "items"},
@@ -190,6 +192,8 @@ HOW_ROOMS_WORK = (
     "own sign-in. Nothing is reserved for you."
 )
 NOT_RESERVED = "Not reserved by ResourcePilot: book it with your own sign-in"
+# Every Orchestrator card but the menu itself carries this, so no screen is a dead end.
+MAIN_MENU: tuple[str, dict[str, Any]] = ("Main menu", {"action": "start_over"})
 
 
 # ---------------------------------------------------------------------------
@@ -284,6 +288,84 @@ def _validate_predefined(kind: str, payload: dict[str, Any]) -> None:
                 raise ValueError(f"carousel items need string {name} fields")
 
 
+# Card values are plain text, so a link inside a card cannot be clicked. The chat bubble above
+# the card renders markdown, so every link a card shows is repeated there as a real link.
+LINK_RE = re.compile(r"https://[^\s<>\"'()\[\]]+")
+LINK_LIMIT = 12
+# Rows that mention links which failed a check: those must never become clickable.
+UNLINKED_LABELS = frozenset({"Sources", "Source"})
+_MARKDOWN_SPECIAL = re.compile(r"([\\`*_{}\[\]()<>#!|~])")
+
+
+def _link_label(text: str) -> str:
+    """A capped, markdown-escaped link label: page text is shown as data, never as markup."""
+    text = " ".join(text.split())[:80]
+    return _MARKDOWN_SPECIAL.sub(r"\\\1", text)
+
+
+def _urls(value: str) -> list[tuple[str, str]]:
+    """Each https URL in a value, with the words before it (``"Name: url"`` gives ``Name``)."""
+    found = []
+    for match in LINK_RE.finditer(value):
+        url = match.group(0).rstrip(".,;:!?")
+        prefix = value[: match.start()].split(";")[-1].strip().rstrip(":").strip()
+        found.append((prefix, url))
+    return found
+
+
+def card_links(payload: dict[str, Any]) -> list[tuple[str, str]]:
+    """The ``(label, url)`` links a card shows in its rows and text, in order, deduplicated.
+
+    Images (``src``, ``image``, ``hero_image``) and selections are skipped: only links the
+    student is meant to open are collected.
+    """
+    links: list[tuple[str, str]] = []
+
+    def add(label: str, url: str) -> None:
+        if url not in {known for _, known in links}:
+            links.append((label or "Link", url))
+
+    for row in payload.get("summary_rows", []):
+        if row["label"] in UNLINKED_LABELS:
+            continue
+        for prefix, url in _urls(row["value"]):
+            add(prefix or row["label"], url)
+
+    def walk(node: Any) -> None:
+        if isinstance(node, list):
+            context = ""
+            for child in node:
+                if isinstance(child, dict) and child.get("type") == "text":
+                    value = str(child.get("value") or "")
+                    urls = _urls(value)
+                    for prefix, url in urls:
+                        add(
+                            f"{prefix} · {context}" if prefix and context else prefix or context,
+                            url,
+                        )
+                    if not urls and child.get("style") != "muted":
+                        context = value
+                else:
+                    walk(child)
+        elif isinstance(node, dict):
+            for key in ("root", "children", "items"):
+                if key in node:
+                    walk(node[key])
+
+    if "root" in payload:
+        walk([payload["root"]])
+    return links[:LINK_LIMIT]
+
+
+def with_links(narration: str, payload: dict[str, Any]) -> str:
+    """The narration followed by every link the card shows, as clickable markdown links."""
+    links = card_links(payload)
+    if not links:
+        return narration
+    lines = "\n".join(f"- [{_link_label(label)}]({url})" for label, url in links)
+    return f"{narration}\n\n{lines}" if narration else lines
+
+
 def card_message(
     narration: str, kind: str, payload: dict[str, Any], *, terminal: bool = False
 ) -> ChatMessage:
@@ -296,12 +378,9 @@ def card_message(
     encoded = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
     if len(encoded.encode()) > CARD_LIMIT_BYTES:
         raise ValueError("card_payload exceeds the 64KB Agentverse limit")
-    if terminal and (
-        kind in {"form", "review"}
-        or card_inputs(payload)
-        or any(sel.get("action") in INPUT_ACTIONS for _, sel in card_buttons(payload))
-    ):
-        raise ValueError("a card that expects input can never be terminal")
+    # A terminal card's drawer never opens, so even its plain buttons could not be pressed.
+    if terminal and (kind in {"form", "review"} or card_inputs(payload) or card_buttons(payload)):
+        raise ValueError("a card that expects input or offers buttons can never be terminal")
     metadata = {
         "card_protocol_version": "1",
         "requires_card_interaction": "true",
@@ -315,7 +394,7 @@ def card_message(
         timestamp=datetime.now(UTC),
         msg_id=uuid4(),
         content=[
-            TextContent(type="text", text=narration),
+            TextContent(type="text", text=with_links(narration, payload)),
             MetadataContent(type="metadata", metadata=metadata),
         ],
     )
@@ -447,6 +526,46 @@ def _image(name: str, alt: str = "") -> list[dict[str, Any]]:
     return [{"type": "image", "src": url, "alt": alt or name, "aspect_ratio": "16:9"}]
 
 
+def _beside(picture: list[dict[str, Any]], lines: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """A picture in a row beside some lines, so it takes about half the width, not all of it."""
+    if not picture or not lines:
+        return [*picture, *lines]
+    return [
+        {
+            "type": "group",
+            "direction": "row",
+            "children": [*picture, {"type": "group", "direction": "column", "children": lines}],
+        }
+    ]
+
+
+def _header(name: str, alt: str, lines: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """A card's picture beside its opening lines, or just the lines when images are off."""
+    return _beside(_image(name, alt), lines)
+
+
+# Elements that can sit beside a card's picture; the first other element starts the card body.
+HEADER_TYPES = frozenset({"badge", "text", "heading"})
+
+
+def _menu_cta() -> dict[str, Any]:
+    """The Main menu button as a detail card CTA."""
+    label, selection = MAIN_MENU
+    return {"label": label, "selection": selection}
+
+
+def _menu_item() -> dict[str, Any]:
+    """The Main menu as the last carousel item: a carousel has no buttons of its own."""
+    label, selection = MAIN_MENU
+    return {
+        "id": "main_menu",
+        **_item_image("menu-banner"),
+        "title": label,
+        "subtitle": "Back to every campus service",
+        "primary_cta": {"label": label, "selection": selection},
+    }
+
+
 def _with_hero(
     card: tuple[str, dict[str, Any]], name: str, alt: str = ""
 ) -> tuple[str, dict[str, Any]]:
@@ -461,19 +580,30 @@ def _with_hero(
         return _review_to_custom(payload, name, alt)
     if kind == "custom":
         root = dict(payload["root"])
-        root["children"] = [*_image(name, alt or str(root.get("title") or "")), *root["children"]]
+        children = list(root["children"])
+        lead = next(
+            (index for index, child in enumerate(children) if child["type"] not in HEADER_TYPES),
+            len(children),
+        )
+        alt = alt or str(root.get("title") or "")
+        root["children"] = [*_header(name, alt, children[:lead]), *children[lead:]]
         return kind, {"root": root}
     return card
 
 
 def _form_to_custom(
-    payload: dict[str, Any], hero: str, alt: str = ""
+    payload: dict[str, Any],
+    hero: str,
+    alt: str = "",
+    *,
+    intro: list[dict[str, Any]] | None = None,
+    menu: bool = True,
 ) -> tuple[str, dict[str, Any]]:
-    """The same fields and submit selection as a form card, under a picture."""
-    children: list[dict[str, Any]] = [*_image(hero, alt or payload["title"])]
+    """The same fields and submit selection as a form card, under a picture, then Main menu."""
+    children = _header(hero, alt or payload["title"], list(intro or []))
     children.extend({"type": "input", **field} for field in payload["fields"])
     cta = payload["submit_cta"]
-    children.append(_button(cta["label"], cta["selection"], primary=True))
+    children.append(_buttons([(cta["label"], cta["selection"]), *([MAIN_MENU] if menu else [])]))
     return "custom", {"root": {"type": "section", "title": payload["title"], "children": children}}
 
 
@@ -493,12 +623,16 @@ def _rows(rows: list[dict[str, str]]) -> list[dict[str, Any]]:
 
 
 def _review_to_custom(
-    payload: dict[str, Any], hero: str, alt: str = ""
+    payload: dict[str, Any],
+    hero: str,
+    alt: str = "",
+    *,
+    intro: list[dict[str, Any]] | None = None,
 ) -> tuple[str, dict[str, Any]]:
     """The same rows and approve/reject selections as a review card, under a picture."""
     approve, reject = payload["approve_cta"], payload["reject_cta"]
     children = [
-        *_image(hero, alt or payload["title"]),
+        *_header(hero, alt or payload["title"], list(intro or [])),
         *_rows(payload["summary_rows"]),
         _buttons(
             [(approve["label"], approve["selection"]), (reject["label"], reject["selection"])]
@@ -537,12 +671,12 @@ def status_card(
     image: str | None = None,
 ) -> tuple[str, dict[str, Any]]:
     """Profile chat card shared by every specialist; it points to the Orchestrator."""
-    children: list[dict[str, Any]] = [*(_image(image, title) if image else [])]
-    children.extend(
+    lines: list[dict[str, Any]] = [
         {"type": "badge", "label": label, "variant": variant}
         for label, variant in (badges or [("Online", "success")])
-    )
-    children.append({"type": "text", "value": responsibility, "style": "body"})
+    ]
+    lines.append({"type": "text", "value": responsibility, "style": "body"})
+    children = _header(image, title, lines) if image else lines
     children.extend({"type": "text", "value": fact, "style": "muted"} for fact in facts or [])
     children.append(
         {
@@ -568,45 +702,38 @@ SERVICES_MENU = (
         "Study rooms",
         "Live · any school",
         "success",
-        "Real open library study rooms at your school. Free: we re-check the room, then you "
-        "book it on your school's site with your own sign-in.",
+        "Open library rooms, re-checked live. You book with your own sign-in.",
     ),
     (
         "wellness",
         "Health & wellness",
         "Live · any school",
         "success",
-        "Meditation and quiet rooms open at your school, plus this week's wellness events and "
-        "clinics. Free: you book or RSVP on your school's site. We never ask about your health.",
+        "Quiet rooms and this week's wellness events. We never ask about your health.",
     ),
     (
         "housing",
         "Campus housing",
         "Live · IPEDS",
         "success",
-        "Dorm beds, typical room and board, and meal plans, plus your housing office and "
-        "application portal. You apply on your school's site.",
+        "Residence halls, typical costs, and official links. You apply on your school's site.",
     ),
     (
         "emergency",
         "Emergency (demo)",
         "Demo drill · not 911",
         "warning",
-        "Practice reporting a campus emergency: a voice agent phones your team's demo contact "
-        "and describes it. It never calls 911. In a real emergency, call 911.",
+        "Practice a report: a voice agent calls your demo contact, never 911.",
     ),
 )
 
 
-def _tile(
-    image: str, title: str, body: str, badge: tuple[str, str], button: dict[str, Any]
-) -> dict[str, Any]:
-    """One picture tile in the services grid."""
+def _tile(title: str, body: str, badge: tuple[str, str], button: dict[str, Any]) -> dict[str, Any]:
+    """One tile in the services grid: no picture of its own, so the menu fits on one screen."""
     return {
         "type": "group",
         "direction": "column",
         "children": [
-            *_image(image, title),
             {"type": "heading", "value": title, "level": 3},
             {"type": "badge", "label": badge[0], "variant": badge[1]},
             {"type": "text", "value": body, "style": "muted"},
@@ -616,23 +743,19 @@ def _tile(
 
 
 def welcome_card(school: str = "") -> tuple[str, dict[str, Any]]:
-    """The campus services menu as picture tiles, two to a row, in the spirit of Welcome Week.
+    """The campus services menu: a banner beside the intro, then compact tiles, two to a row.
 
     Every service uses the school the student set once; the menu names it and can change it.
     """
-    children: list[dict[str, Any]] = [
-        *_image("menu-banner", "ResourcePilot campus services"),
+    intro: list[dict[str, Any]] = [
         {
             "type": "text",
-            "value": (
-                "Campus help for your first weeks, at any US school. Pick a service; "
-                "everything runs on buttons and short forms."
-            ),
+            "value": "Campus help for your first weeks, at any US school. Pick a service.",
             "style": "body",
-        },
+        }
     ]
     if school:
-        children.append(
+        intro.append(
             {
                 "type": "group",
                 "direction": "row",
@@ -642,9 +765,9 @@ def welcome_card(school: str = "") -> tuple[str, dict[str, Any]]:
                 ],
             }
         )
+    children = _beside(_image("menu-banner", "ResourcePilot campus services"), intro)
     tiles = [
         _tile(
-            f"svc-{service}",
             title,
             body,
             (badge, variant),
@@ -658,9 +781,8 @@ def welcome_card(school: str = "") -> tuple[str, dict[str, Any]]:
     ]
     tiles.append(
         _tile(
-            "svc-bookings",
             "My bookings",
-            "Your recent room booking links, from ResourcePilot's audit trail.",
+            "Your recent room booking links.",
             ("Yours only", "info"),
             _button("My bookings", {"action": "show_bookings"}),
         )
@@ -682,12 +804,18 @@ def notice_card(
     buttons: list[tuple[str, dict[str, Any]]] | None = None,
     image: str | None = None,
 ) -> tuple[str, dict[str, Any]]:
-    """A short message card; its picture is a warning or an info hero unless one is given."""
+    """A short message card; its picture is a warning or an info hero unless one is given.
+
+    Main menu follows the given buttons unless one of them already opens the menu.
+    """
     children: list[dict[str, Any]] = []
     if badge:
         children.append({"type": "badge", "label": badge, "variant": variant})
     children.append({"type": "text", "value": body, "style": "body"})
-    children.append(_buttons(buttons or [("Start over", {"action": "start_over"})]))
+    actions = list(buttons or [])
+    if not any(selection == MAIN_MENU[1] for _, selection in actions):
+        actions.append(MAIN_MENU)
+    children.append(_buttons(actions))
     return _with_hero(
         ("custom", {"root": {"type": "section", "title": title, "children": children}}),
         image or ("hero-warning" if variant == "warning" else "hero-info"),
@@ -700,7 +828,7 @@ def error_card(message: str, *, service: str | None = None) -> tuple[str, dict[s
         actions.append(("Open the form", {"action": "open_service", "service": service}))
     if service in SCHOOL_SERVICES:
         actions.append(("Change school", {"action": "change_school"}))
-    actions.append(("Start over", {"action": "start_over"}))
+    actions.append(MAIN_MENU)
     return notice_card(
         "ResourcePilot", message, badge="Needs attention", variant="warning", buttons=actions
     )
@@ -734,15 +862,6 @@ def school_card(current: str = "", *, error: str = "") -> tuple[str, dict[str, A
 
     Only the domain of the email is kept; the part before ``@`` is dropped before it is stored.
     """
-    kind, payload = _form_to_custom(
-        {
-            "title": "Change your school" if current else "Set your school",
-            "fields": [_email_field()],
-            "submit_cta": {"label": "Save my school", "selection": {"action": "set_school"}},
-        },
-        "menu-banner",
-        "ResourcePilot campus services",
-    )
     intro: list[dict[str, Any]] = []
     if error:
         intro.append({"type": "badge", "label": "Needs attention", "variant": "warning"})
@@ -767,26 +886,47 @@ def school_card(current: str = "", *, error: str = "") -> tuple[str, dict[str, A
             "style": "muted",
         }
     )
-    children = payload["root"]["children"]
-    at = 1 if children and children[0]["type"] == "image" else 0
-    children[at:at] = intro
-    children.append({"type": "text", "value": CRISIS_TEXT, "style": "muted"})
+    kind, payload = _form_to_custom(
+        {
+            "title": "Change your school" if current else "Set your school",
+            "fields": [_email_field()],
+            "submit_cta": {"label": "Save my school", "selection": {"action": "set_school"}},
+        },
+        "menu-banner",
+        "ResourcePilot campus services",
+        intro=intro,
+        # Before a school is saved there is no menu to go back to.
+        menu=bool(current),
+    )
+    payload["root"]["children"].append({"type": "text", "value": CRISIS_TEXT, "style": "muted"})
     return kind, payload
 
 
 def _with_school(card: tuple[str, dict[str, Any]], school: str) -> tuple[str, dict[str, Any]]:
-    """Name the saved school on a form, just under its picture."""
+    """Name the saved school on a form, beside its picture, or above the fields without one."""
     kind, payload = card
     if school:
+        line = {"type": "text", "value": f"At {school} · change it from the menu", "style": "muted"}
         children = payload["root"]["children"]
-        at = next(
-            (index + 1 for index, child in enumerate(children) if child["type"] == "image"), 0
+        header = next(
+            (
+                child
+                for child in children
+                if child["type"] == "group" and child["children"][0]["type"] == "image"
+            ),
+            None,
         )
-        children.insert(
-            at,
-            {"type": "text", "value": f"At {school} · change it from the menu", "style": "muted"},
-        )
+        if header:
+            header["children"][-1]["children"].append(line)
+        else:
+            at = next(index for index, child in enumerate(children) if child["type"] == "input")
+            children.insert(at, line)
     return kind, payload
+
+
+def _intro(value: str) -> list[dict[str, Any]]:
+    """The one line a form shows beside its picture."""
+    return [{"type": "text", "value": value, "style": "body"}]
 
 
 def _day_options(days: list[tuple[str, str]]) -> list[tuple[str, str]]:
@@ -816,6 +956,7 @@ def rooms_form(days: list[tuple[str, str]] | None = None) -> tuple[str, dict[str
         },
         "svc-rooms",
         "Study rooms",
+        intro=_intro("Pick a time. We find rooms open at your school and re-check them live."),
     )
 
 
@@ -843,6 +984,7 @@ def wellness_form(days: list[tuple[str, str]] | None = None) -> tuple[str, dict[
         },
         "svc-wellness",
         "Health & wellness",
+        intro=_intro("Free quiet rooms and this week's wellness events. No health questions."),
     )
     # The crisis line comes before everything else, the picture included.
     payload["root"]["children"][:0] = [
@@ -889,6 +1031,9 @@ def emergency_form() -> tuple[str, dict[str, Any]]:
         },
         "svc-emergency",
         "Emergency demo drill",
+        intro=_intro(
+            "Describe a practice emergency. You review the call before anything is dialed."
+        ),
     )
     # The drill disclaimer comes before everything else, the picture included.
     payload["root"]["children"][:0] = _demo_notice()
@@ -921,6 +1066,9 @@ def housing_form() -> tuple[str, dict[str, Any]]:
         },
         "svc-housing",
         "Campus housing",
+        intro=_intro(
+            "Tell us what you need. We match the halls your school lists on its own site."
+        ),
     )
 
 
@@ -970,7 +1118,7 @@ def room_link_card(workflow_id: str, school: str) -> tuple[str, dict[str, Any]]:
                                 "Check this link",
                                 {"action": "submit_link", "workflow_id": workflow_id},
                             ),
-                            ("Start over", {"action": "start_over"}),
+                            MAIN_MENU,
                         ]
                     ),
                 ],
@@ -1013,7 +1161,9 @@ def progress_card(
         children.append({"type": "text", "value": "\n".join(steps), "style": "body"})
     children.append({"type": "text", "value": f"Workflow {workflow_id[:8]}", "style": "muted"})
     children.append(
-        _button("Refresh status", {"action": "show_status", "workflow_id": workflow_id})
+        _buttons(
+            [("Refresh status", {"action": "show_status", "workflow_id": workflow_id}), MAIN_MENU]
+        )
     )
     return _with_hero(
         ("custom", {"root": {"type": "section", "title": "Agents at work", "children": children}}),
@@ -1056,6 +1206,7 @@ def rooms_carousel(
                 },
             }
         )
+    items.append(_menu_item())
     return "carousel", {
         "title": f"Open study rooms at {school}",
         "subtitle": "Re-checked live before you get the booking link. Always free.",
@@ -1116,6 +1267,7 @@ def room_detail(
                     "label": "Other rooms",
                     "selection": {"action": "show_results", "workflow_id": workflow_id},
                 },
+                _menu_cta(),
             ],
         },
     )
@@ -1125,7 +1277,7 @@ def room_detail(
 def room_link_receipt(
     option: dict[str, Any], *, service: str = "rooms"
 ) -> tuple[str, dict[str, Any]]:
-    """The booking link after a successful re-check. Safe as a terminal card: only CTAs remain."""
+    """The booking link after a successful re-check: no input, only ways onward."""
     line = option["lines"][0]
     rows = [{"label": "Room", "value": str(line["name"])}]
     if line.get("slot_label"):
@@ -1161,7 +1313,7 @@ def room_link_receipt(
                         "service": "wellness" if service == "wellness" else "rooms",
                     },
                 },
-                {"label": "Menu", "selection": {"action": "start_over"}},
+                _menu_cta(),
             ],
         },
     )
@@ -1214,7 +1366,7 @@ def housing_card(state_data: dict[str, Any]) -> tuple[str, dict[str, Any]]:
                     "primary": True,
                     "selection": {"action": "open_service", "service": "rooms"},
                 },
-                {"label": "Start over", "selection": {"action": "start_over"}},
+                _menu_cta(),
             ],
         },
     )
@@ -1357,6 +1509,7 @@ def housing_carousel(
             },
         }
     )
+    items.append(_menu_item())
     housing = dict(data.get("housing") or {})
     facts = dict(housing.get("facts") or [])
     beds = (
@@ -1458,7 +1611,7 @@ def housing_detail(
                 "label": "Housing facts",
                 "selection": {"action": "show_housing_facts", "workflow_id": workflow_id},
             },
-            {"label": "Start over", "selection": {"action": "start_over"}},
+            _menu_cta(),
         ],
     }
     if hall.get("photo"):
@@ -1498,6 +1651,7 @@ def housing_unlock_card(
             [
                 ("Unlock my hall match", {"action": "unlock_housing", "workflow_id": workflow_id}),
                 ("Free facts only", {"action": "show_housing_facts", "workflow_id": workflow_id}),
+                MAIN_MENU,
             ]
         ),
     ]
@@ -1552,7 +1706,11 @@ def wellness_card(workflow_id: str, data: dict[str, Any]) -> tuple[str, dict[str
     children: list[dict[str, Any]] = [
         {"type": "badge", "label": "Crisis help · 24/7", "variant": "warning"},
         {"type": "text", "value": CRISIS_TEXT, "style": "body"},
-        *_image("wellness-hero", f"Health & wellness at {name}"),
+        *_header(
+            "wellness-hero",
+            f"Health & wellness at {name}",
+            _intro(f"Free quiet rooms and this week's wellness events at {name}."),
+        ),
         {"type": "divider"},
         {"type": "heading", "value": "Wellness rooms open", "level": 3},
     ]
@@ -1571,9 +1729,8 @@ def wellness_card(workflow_id: str, data: dict[str, Any]) -> tuple[str, dict[str
             children.append(
                 {
                     "type": "group",
-                    "direction": "column",
+                    "direction": "row",
                     "children": [
-                        *_image(room_art(0, wellness=True), str(line["name"])),
                         {
                             "type": "text",
                             "value": f"{line['name']} · {detail}" if detail else str(line["name"]),
@@ -1616,28 +1773,43 @@ def wellness_card(workflow_id: str, data: dict[str, Any]) -> tuple[str, dict[str
                 "type": "list",
                 "items": [
                     {
-                        "children": [
-                            *_event_image(event),
-                            {"type": "text", "value": str(event["title"]), "style": "body"},
-                            {
-                                "type": "text",
-                                "value": " · ".join(
-                                    part
-                                    for part in (
-                                        str(event["when"]),
-                                        str(event.get("location") or ""),
-                                    )
-                                    if part
-                                ),
-                                "style": "muted",
-                            },
-                            {"type": "text", "value": f"RSVP: {event['url']}", "style": "muted"},
-                        ]
+                        "children": _beside(
+                            _event_image(event),
+                            [
+                                {"type": "text", "value": str(event["title"]), "style": "body"},
+                                {
+                                    "type": "text",
+                                    "value": " · ".join(
+                                        part
+                                        for part in (
+                                            str(event["when"]),
+                                            str(event.get("location") or ""),
+                                        )
+                                        if part
+                                    ),
+                                    "style": "muted",
+                                },
+                                {
+                                    "type": "text",
+                                    "value": f"RSVP: {event['url']}",
+                                    "style": "muted",
+                                },
+                            ],
+                        )
                     }
-                    for event in events
+                    for event in events[:CARD_EVENTS]
                 ],
             }
         )
+        if len(events) > CARD_EVENTS:
+            more = len(events) - CARD_EVENTS
+            children.append(
+                {
+                    "type": "text",
+                    "value": f"{more} more this week on your school's events calendar",
+                    "style": "muted",
+                }
+            )
     elif wellness.get("status") == "found":
         children.append(
             {"type": "text", "value": "No wellness events listed this week", "style": "muted"}
@@ -1667,7 +1839,7 @@ def wellness_card(workflow_id: str, data: dict[str, Any]) -> tuple[str, dict[str
             _buttons(
                 [
                     ("Study rooms", {"action": "open_service", "service": "rooms"}),
-                    ("Start over", {"action": "start_over"}),
+                    MAIN_MENU,
                 ]
             ),
         ]
@@ -1695,6 +1867,7 @@ def emergency_review_card(workflow_id: str, preview: dict[str, Any]) -> tuple[st
         },
         "hero-call",
         "Demo drill phone call",
+        intro=_intro("This is what the voice agent will say. Nothing is dialed until Call now."),
     )
     # The drill disclaimer comes before everything else, the picture included.
     payload["root"]["children"][:0] = _demo_notice()
@@ -1705,24 +1878,25 @@ def emergency_call_card(
     workflow_id: str, call: dict[str, Any], status: dict[str, Any] | None = None
 ) -> tuple[str, dict[str, Any]]:
     """The placed demo call, and once checked, its status, summary, and transcript."""
-    children: list[dict[str, Any]] = [
-        *_demo_notice(),
-        *_image("hero-call", "Demo drill phone call"),
+    lines: list[dict[str, Any]] = [
         {
             "type": "text",
             "value": f"Calling your demo contact ({call.get('to') or 'not shown'}).",
             "style": "body",
         },
+        {
+            "type": "text",
+            "value": (
+                f"{status.get('status_label') or 'Checking the call'} · "
+                f"{status.get('duration') or '0:00'}"
+                if status
+                else "Put the demo phone on speaker. Check the call for its transcript."
+            ),
+            "style": "muted",
+        },
     ]
+    children = [*_demo_notice(), *_header("hero-call", "Demo drill phone call", lines)]
     if status:
-        children.append(
-            {
-                "type": "text",
-                "value": f"{status.get('status_label') or 'Checking the call'} · "
-                f"{status.get('duration') or '0:00'}",
-                "style": "muted",
-            }
-        )
         if status.get("summary"):
             children.extend(
                 [
@@ -1730,8 +1904,8 @@ def emergency_call_card(
                     {"type": "text", "value": str(status["summary"]), "style": "body"},
                 ]
             )
-        lines = list(status.get("transcript") or [])
-        if lines:
+        transcript = list(status.get("transcript") or [])
+        if transcript:
             children.append({"type": "heading", "value": "Transcript", "level": 3})
             children.append(
                 {
@@ -1743,23 +1917,15 @@ def emergency_call_card(
                                 {"type": "text", "value": str(line["message"]), "style": "body"},
                             ]
                         }
-                        for line in lines
+                        for line in transcript
                     ],
                 }
             )
-    else:
-        children.append(
-            {
-                "type": "text",
-                "value": "Put the demo phone on speaker. Check the call for its transcript.",
-                "style": "muted",
-            }
-        )
     children.append(
         _buttons(
             [
                 ("Check the call", {"action": "call_status", "workflow_id": workflow_id}),
-                ("Menu", {"action": "start_over"}),
+                MAIN_MENU,
             ]
         )
     )
@@ -1793,9 +1959,7 @@ def bookings_card(bookings: list[dict[str, Any]]) -> tuple[str, dict[str, Any]]:
         {
             "title": "Your recent booking links",
             "summary_rows": rows,
-            "ctas": [
-                {"label": "New request", "primary": True, "selection": {"action": "start_over"}}
-            ],
+            "ctas": [{**_menu_cta(), "primary": True}],
         },
     )
     return _with_hero(card, "svc-bookings")

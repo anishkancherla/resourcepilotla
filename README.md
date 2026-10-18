@@ -45,20 +45,23 @@ This repository uses public Fetch.ai packages and documentation only.
 
 ![ResourcePilot campus services](assets/cards/menu-banner.jpg)
 
-Every reply in ASI:One is a picture card:
+Every reply in ASI:One is a picture card. Each card's picture sits beside its opening lines rather
+than across the full width, so cards stay short and the buttons stay close:
 
-- The first card sets your school once, under the menu banner.
-- The menu is a banner and a grid of picture tiles, one per service, like the Welcome Week hubs.
-  It names your school and offers **Change school**.
-- Each form has a picture of its service. The wellness form keeps the 988 crisis line first, and
+- The first card sets your school once, beside the menu banner.
+- The menu is a banner and a compact grid of tiles, one per service, like the Welcome Week hubs.
+  Only the banner has a picture, so every service fits on one screen. It names your school and
+  offers **Change school**.
+- Each form has a small picture of its service and a one-line intro. The wellness form keeps the 988 crisis line first, and
   the emergency form keeps its demo-drill notice first.
 - Progress cards show the agent at work, with each specialist's own art.
 - The rooms carousel shows a picture for each open study or wellness room, and the room's detail,
   booking-link, and receipt cards have their own art.
 - The housing carousel shows each hall with the school's own photo of it, and a residence-hall
   picture when the school has none.
-- The wellness card shows its open rooms and each event with the event's own photo from the
-  school's calendar, or a default picture.
+- The wellness card lists its open rooms as compact rows, then up to five events, each with a
+  thumbnail of the event's own photo from the school's calendar or a default picture. It counts
+  any more events.
 - The emergency review and call cards show a demo-drill phone call, never police or ambulance
   imagery, and still say they do not contact 911 or campus police.
 

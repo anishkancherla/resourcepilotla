@@ -453,7 +453,7 @@ async def _send_link(ctx: Context, sender: str, state: dict[str, Any], narration
     receipt = cards.room_link_receipt(
         dict(state["option"]), service=str(state.get("service") or "rooms")
     )
-    await _send_card(ctx, sender, narration, receipt, terminal=True)
+    await _send_card(ctx, sender, narration, receipt)
 
 
 async def _workflow_action(
@@ -559,7 +559,7 @@ async def _workflow_action(
         "That action is not valid for this request right now.",
         badge="Not available",
         variant="warning",
-        buttons=[_status_button(workflow_id), ("Start over", {"action": "start_over"})],
+        buttons=[_status_button(workflow_id), cards.MAIN_MENU],
     )
 
 
@@ -852,7 +852,7 @@ async def _place_call(ctx: Context, sender: str, state: dict[str, Any]) -> None:
             sender,
             "Already placed",
             "This demo call was already placed. Start a new demo to call again.",
-            buttons=[_status_button(workflow_id), ("Menu", {"action": "start_over"})],
+            buttons=[_status_button(workflow_id), cards.MAIN_MENU],
         )
         return
     data = state["data"]
@@ -879,7 +879,7 @@ async def _check_call(ctx: Context, sender: str, state: dict[str, Any]) -> None:
             sender,
             "Not available",
             "There is no placed call to check for this request right now.",
-            buttons=[_status_button(workflow_id), ("Menu", {"action": "start_over"})],
+            buttons=[_status_button(workflow_id), cards.MAIN_MENU],
         )
         return
     await _side_task(
@@ -966,7 +966,7 @@ async def _request_match_payment(ctx: Context, sender: str, state: dict[str, Any
             sender,
             "Not available",
             "There is no hall match waiting for payment on this request.",
-            buttons=[_status_button(workflow_id), ("Menu", {"action": "start_over"})],
+            buttons=[_status_button(workflow_id), cards.MAIN_MENU],
         )
         return
     if not await store.claim("payment_request", f"{workflow_id}:{attempt}"):

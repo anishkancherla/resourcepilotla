@@ -176,6 +176,31 @@ FACTORIES = [
 ]
 
 
+# The menu itself, the first school card (no menu before a school is saved), and profile status
+# cards (they open the Orchestrator) are the only cards without a Main menu button.
+NO_MENU_BUTTON = {cards.school_card, cards.welcome_card}
+
+
+@pytest.mark.parametrize(
+    "factory",
+    [
+        *(factory for factory, _ in FACTORIES if factory not in NO_MENU_BUTTON),
+        lambda: cards.school_card("purdue.edu"),
+        lambda: cards.housing_unlock_card("workflow-1", HALLS, ["$1.00"]),
+        lambda: cards.housing_payment_card("workflow-1", ["$1.00"]),
+    ],
+)
+def test_every_orchestrator_card_leads_back_to_the_main_menu(factory) -> None:
+    _, payload = factory()
+    buttons = cards.card_buttons(payload)
+    if payload == cards.welcome_card("purdue.edu")[1]:
+        return  # the menu itself
+    if any(selection["action"] == "open_orchestrator" for _, selection in buttons):
+        return  # a specialist's profile status card
+    # The demo-call review's Cancel also opens the menu; every other card says Main menu.
+    assert cards.MAIN_MENU in buttons or ("Cancel", cards.MAIN_MENU[1]) in buttons
+
+
 @pytest.mark.parametrize(("factory", "kind"), FACTORIES)
 def test_every_card_uses_the_current_wire_format(factory, kind) -> None:
     actual_kind, payload = factory()
@@ -236,7 +261,10 @@ def test_every_selection_uses_a_known_action(factory, kind) -> None:
 
 
 def test_terminal_flag_is_a_string() -> None:
-    message = cards.card_message("Done", *cards.room_link_receipt(OPTION), terminal=True)
+    info = {
+        "root": {"type": "section", "title": "Done", "children": [{"type": "text", "value": "x"}]}
+    }
+    message = cards.card_message("Done", "custom", info, terminal=True)
     assert _metadata(message)["is_terminal"] == "true"
 
 
@@ -251,6 +279,9 @@ def test_terminal_flag_is_a_string() -> None:
         lambda: cards.room_link_card("workflow-1", "MIT"),
         lambda: cards.emergency_review_card("workflow-1", PREVIEW),
         lambda: ("form", {"title": "x", "fields": [], "submit_cta": {"label": "Go"}}),
+        # A terminal card's drawer never opens, so its buttons could not be pressed either.
+        lambda: cards.room_link_receipt(OPTION),
+        lambda: cards.progress_card("workflow-1", "planner"),
     ],
 )
 def test_a_card_that_expects_input_is_never_terminal(factory) -> None:
@@ -330,7 +361,8 @@ def test_every_form_submits_its_own_service(service) -> None:
         if field["kind"] == "select":
             assert field["options"]
     assert cards.card_buttons(form) == [
-        (form_label(service), {"action": "submit_form", "service": service})
+        (form_label(service), {"action": "submit_form", "service": service}),
+        cards.MAIN_MENU,
     ]
     # The school is set once on its own card, and no form ever asks for a phone number.
     assert not [field for field in fields if field["name"] in {"email", "school"}]
@@ -340,6 +372,14 @@ def test_every_form_submits_its_own_service(service) -> None:
     assert cards.card_buttons(named) == cards.card_buttons(form)
 
 
+def _header(element) -> tuple[str, list]:
+    """A card's picture and the lines beside it, from its header row."""
+    assert element["type"] == "group" and element["direction"] == "row"
+    picture, column = element["children"]
+    assert picture["type"] == "image" and column["direction"] == "column"
+    return picture["src"], column["children"]
+
+
 def test_school_card_asks_once_for_the_school_email() -> None:
     _, card = cards.school_card()
     assert card["root"]["title"] == "Set your school"
@@ -347,8 +387,9 @@ def test_school_card_asks_once_for_the_school_email() -> None:
         ("email", True)
     ]
     assert cards.card_buttons(card) == [("Save my school", {"action": "set_school"})]
-    assert card["root"]["children"][0]["src"] == cards.art("menu-banner")
-    assert "Only the domain is kept" in json.dumps(card)
+    src, lines = _header(card["root"]["children"][0])
+    assert src == cards.art("menu-banner")
+    assert "Only the domain is kept" in lines[-1]["value"]
     assert card["root"]["children"][-1]["value"] == cards.CRISIS_TEXT
     _, change = cards.school_card("purdue.edu", error="Enter your school email")
     assert change["root"]["title"] == "Change your school"
@@ -411,7 +452,8 @@ def test_room_link_card_checks_a_pasted_link_without_skipping() -> None:
 def test_rooms_carousel_items_carry_stable_option_ids() -> None:
     _, carousel = cards.rooms_carousel("workflow-1", [OPTION, PAGE_OPTION], "Purdue")
     assert carousel["title"] == "Open study rooms at Purdue"
-    first, second = carousel["items"]
+    first, second, menu = carousel["items"]
+    assert menu["primary_cta"]["selection"] == {"action": "start_over"}
     assert first["id"] == "opt_0123456789"
     assert first["primary_cta"]["selection"] == {
         "action": "view_room",
@@ -432,6 +474,7 @@ def test_room_detail_rechecks_by_option_and_shows_the_link() -> None:
     assert [cta["selection"] for cta in detail["ctas"]] == [
         {"action": "recheck_room", "workflow_id": "workflow-1", "option_id": "opt_0123456789"},
         {"action": "show_results", "workflow_id": "workflow-1"},
+        {"action": "start_over"},
     ]
     assert detail["ctas"][0]["primary"] is True
     rows = {row["label"]: row["value"] for row in detail["summary_rows"]}
@@ -460,7 +503,7 @@ def test_room_link_receipt_is_a_link_not_a_reservation() -> None:
         {"action": "open_service", "service": "rooms"},
         {"action": "start_over"},
     ]
-    assert [cta["label"] for cta in receipt["ctas"]] == ["Find another room", "Menu"]
+    assert [cta["label"] for cta in receipt["ctas"]] == ["Find another room", "Main menu"]
     assert "sub_options" not in receipt  # terminal-safe: no input beyond its CTA buttons
     assert not PAYMENT_WORDS.findall(json.dumps(receipt))
     _, page = cards.room_link_receipt(PAGE_OPTION)
@@ -507,8 +550,8 @@ def test_progress_card_marks_finished_and_current_stages() -> None:
     assert {"recheck", "link"} <= set(cards.STAGE_LABELS)
     assert all(len(label) <= 24 for label in cards.STAGE_LABELS.values())
     _, card = cards.progress_card("workflow-123456789", "verification", chain)
-    assert card["root"]["children"][0]["src"] == cards.art("role-verification")
-    children = card["root"]["children"][1:]
+    src, children = _header(card["root"]["children"][0])
+    assert src == cards.art("role-verification")
     assert children[0] == {"type": "badge", "label": "Verifying every result", "variant": "info"}
     steps = children[1]["value"].splitlines()
     assert steps == [
@@ -519,12 +562,14 @@ def test_progress_card_marks_finished_and_current_stages() -> None:
     ]
     assert children[2]["value"] == "Workflow workflow"
     assert list(_selections(card)) == [
-        {"action": "show_status", "workflow_id": "workflow-123456789"}
+        {"action": "show_status", "workflow_id": "workflow-123456789"},
+        {"action": "start_over"},
     ]
     _, recheck = cards.progress_card("workflow-1", "recheck")
-    assert recheck["root"]["children"][0]["src"] == cards.art("role-campus-rooms")
-    assert recheck["root"]["children"][1]["label"] == "Re-checking your room"
-    assert len(recheck["root"]["children"]) == 4  # picture, badge, workflow, button: no steps
+    src, lines = _header(recheck["root"]["children"][0])
+    assert src == cards.art("role-campus-rooms")
+    assert lines[0]["label"] == "Re-checking your room"
+    assert len(lines) == 2  # badge and workflow beside the picture: no steps
 
 
 def test_known_actions_cover_the_room_and_demo_call_flows_only() -> None:
@@ -629,7 +674,7 @@ def test_wellness_card_always_carries_the_crisis_line() -> None:
     children = form["root"]["children"]
     assert children[0]["label"] == "Crisis help · 24/7"
     assert children[1]["value"] == cards.CRISIS_TEXT  # before the picture
-    assert children[2]["src"] == cards.art("svc-wellness")
+    assert _header(children[2])[0] == cards.art("svc-wellness")
     names = {field["name"] for field in cards.card_inputs(form)}
     assert names == {"day", "window", "duration"}
 
@@ -750,16 +795,21 @@ def test_image_base_can_move_to_another_https_host(monkeypatch) -> None:
     assert cards.art("hero-info") == "https://cdn.example.org/rp/cards/hero-info.jpg"
 
 
-def test_menu_is_a_picture_grid_with_my_bookings_and_the_crisis_line() -> None:
+def test_menu_is_a_compact_grid_with_my_bookings_and_the_crisis_line() -> None:
     _, menu = cards.welcome_card()
     children = menu["root"]["children"]
-    assert children[0]["src"] == cards.art("menu-banner")
-    rows = [child for child in children if child.get("direction") == "row"]
+    assert _header(children[0])[0] == cards.art("menu-banner")
+    # The banner is the menu's only picture, so every service fits without scrolling far.
+    assert _image_urls(menu) == [cards.art("menu-banner")]
+    rows = [child for child in children[1:] if child.get("direction") == "row"]
     assert [len(row["children"]) for row in rows] == [2, 2, 1]
     tiles = [tile for row in rows for tile in row["children"]]
-    assert [tile["children"][0]["src"] for tile in tiles] == [
-        cards.art(f"svc-{name}")
-        for name in ("rooms", "wellness", "housing", "emergency", "bookings")
+    assert [tile["children"][0]["value"] for tile in tiles] == [
+        "Study rooms",
+        "Health & wellness",
+        "Campus housing",
+        "Emergency (demo)",
+        "My bookings",
     ]
     assert [selection for _, selection in cards.card_buttons(menu)][-1] == {
         "action": "show_bookings"
@@ -773,7 +823,6 @@ def test_event_photos_come_from_the_feed_and_fall_back_to_art() -> None:
     assert EVENT_PHOTO in urls
     assert cards.art("event-default") in urls
     assert cards.art("wellness-hero") in urls
-    assert cards.art("room-wellness") in urls
     encoded = json.dumps(card, ensure_ascii=False)
     assert encoded.index(cards.CRISIS_TEXT) < encoded.index("wellness-hero")
     unsafe = {**WELLNESS["wellness"]["events"][0], "photo": "http://x.edu/a.jpg"}
@@ -781,6 +830,37 @@ def test_event_photos_come_from_the_feed_and_fall_back_to_art() -> None:
         "workflow-1", {**WELLNESS, "wellness": {"status": "found", "events": [unsafe]}}
     )
     assert "http://x.edu/a.jpg" not in _image_urls(card)
+
+
+def _art_parents(node, parent=None):
+    """Each image element with the element that holds it."""
+    if isinstance(node, dict):
+        if node.get("type") == "image":
+            yield node, parent
+        for value in node.values():
+            yield from _art_parents(value, node)
+    elif isinstance(node, list):
+        for value in node:
+            yield from _art_parents(value, parent)
+
+
+@pytest.mark.parametrize(("factory", "kind"), FACTORIES)
+def test_pictures_sit_beside_text_never_full_width(factory, kind, monkeypatch) -> None:
+    monkeypatch.delenv("CARD_IMAGE_BASE", raising=False)
+    _, payload = factory()
+    for _, parent in _art_parents(payload):
+        assert parent["type"] == "group" and parent["direction"] == "row", parent
+
+
+def test_wellness_card_lists_a_few_events_and_counts_the_rest() -> None:
+    event = WELLNESS["wellness"]["events"][0]
+    events = [{**event, "title": f"Event {n}"} for n in range(8)]
+    _, card = cards.wellness_card(
+        "workflow-1", {**WELLNESS, "wellness": {"status": "found", "events": events}}
+    )
+    [listing] = [child for child in card["root"]["children"] if child["type"] == "list"]
+    assert len(listing["items"]) == cards.CARD_EVENTS
+    assert "3 more this week" in json.dumps(card)
 
 
 def test_halls_show_their_own_photo_else_the_default_hall() -> None:
@@ -796,7 +876,7 @@ def test_halls_show_their_own_photo_else_the_default_hall() -> None:
 
 def test_room_detail_shows_its_carousel_picture() -> None:
     _, carousel = cards.rooms_carousel("workflow-1", [OPTION, PAGE_OPTION], "Purdue")
-    for index, item in enumerate(carousel["items"]):
+    for index, item in enumerate(carousel["items"][:-1]):
         option = [OPTION, PAGE_OPTION][index]
         _, detail = cards.room_detail("workflow-1", option, index=index)
         assert detail["hero_image"] == item["image"]
@@ -825,3 +905,40 @@ def test_emergency_cards_keep_every_disclaimer_with_pictures() -> None:
         assert not re.search(r"\d{5,}", encoded)  # never more than the last four digits
     _, review = cards.emergency_review_card("wf-9", PREVIEW)
     assert cards.art("hero-call") in _image_urls(review)
+
+
+def _narration(message) -> str:
+    return next(item.text for item in message.content if isinstance(item, TextContent))
+
+
+def test_card_links_are_clickable_in_the_chat_bubble() -> None:
+    kind, receipt = cards.room_link_receipt(OPTION)
+    text = _narration(cards.card_message("Here is your link.", kind, receipt))
+    assert text == f"Here is your link.\n\n- [Book here]({LINE['handoff_url']})"
+    _, housing = cards.housing_card(HOUSING)
+    assert cards.card_links(housing) == [
+        ("Housing office", "https://housing.purdue.edu/"),
+        ("Apply · Apply for housing", "https://housing.purdue.edu/apply"),
+    ]
+    _, bookings = cards.bookings_card([BOOKED])
+    assert cards.card_links(bookings) == [("HSSE 2101 · Purdue University", LINE["handoff_url"])]
+
+
+def test_event_links_are_labeled_by_title_and_images_are_skipped() -> None:
+    _, card = cards.wellness_card("workflow-1", WELLNESS)
+    links = cards.card_links(card)
+    assert ("RSVP · Yoga", "https://events.x.edu/2") in links
+    assert not [url for _, url in links if url in json.dumps(_image_urls(card))]
+
+
+def test_link_labels_cannot_inject_markdown() -> None:
+    payload = {
+        "title": "x",
+        "summary_rows": [
+            {"label": "Hall", "value": "[Evil](https://bad.example) **x**: https://ok.edu/a"},
+            {"label": "Sources", "value": "Dropped links that did not open: https://dead.edu"},
+        ],
+    }
+    text = cards.with_links("", payload)
+    assert "https://dead.edu" not in text
+    assert "](https://ok.edu/a)" in text and "\\[Evil\\]" in text and "\\*\\*" in text

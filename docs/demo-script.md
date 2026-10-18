@@ -58,7 +58,7 @@ uv run pytest tests/test_network.py -k taken -v
 
 ## 4. No booking system found: the paste-link card (25 s)
 
-Press **Menu**, then **Change school**, save an MIT email, and search for a room again. The Researcher finds no system it
+Press **Main menu**, then **Change school**, save an MIT email, and search for a room again. The Researcher finds no system it
 recognizes, so it asks instead of guessing: a card with one field for the room-booking link.
 Paste the library's
 booking link and press **Check this link**. The Researcher checks the pasted link with the same
@@ -72,7 +72,7 @@ The crisis line is static, so it shows even when a school has nothing to find."
 
 ## 5. Campus housing (25 s)
 
-Press **Menu**, then **Open campus housing** (the school is Purdue; Georgia Tech or UC Riverside
+Press **Main menu**, then **Open campus housing** (the school is Purdue; Georgia Tech or UC Riverside
 also work, via **Change school**), pick **Incoming first-year**, tick **Air conditioning**, and press **Find housing**. If payments are
 set up, the hall-match offer appears first: press **Unlock my hall match** and pay in ASI:One's
 payment panel with Stripe's test card `4242 4242 4242 4242` (any future date and CVC) or testnet
@@ -86,7 +86,7 @@ your criteria ruled out, and **Housing facts** for IPEDS numbers and the portal.
 
 ## 6. Optional: Emergency (demo) (30 s)
 
-Put your teammate's phone on speaker, near the microphone. Press **Menu**, then **Emergency
+Put your teammate's phone on speaker, near the microphone. Press **Main menu**, then **Emergency
 (demo)**. Pick a kind (for example fire or smoke), enter where on campus and how many people, and
 submit the form. On the review card, point at "not 911" and the masked number, which shows only
 the last four digits. Say: "It can only call our demo contact, and the voice opens by saying this
@@ -97,7 +97,7 @@ call 911."
 
 ## 7. My bookings (10 s)
 
-Press **Menu**, then **My bookings**. The room from step 2 is there with its booking link.
+Press **Main menu**, then **My bookings**. The room from step 2 is there with its booking link.
 
 ## 8. An agent profile chat (15 s)
 
