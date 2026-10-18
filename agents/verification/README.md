@@ -1,5 +1,7 @@
 # ResourcePilot Verification
 
+<img src="https://raw.githubusercontent.com/kevinjylin/resourcepilotla/main/assets/avatars/verification.jpg" alt="ResourcePilot Verification" width="160">
+
 Decides which results ResourcePilot is willing to show a student, before the student sees them.
 
 For a study-room search it checks every room offer from Campus Rooms. An offer passes only if:

@@ -4,8 +4,11 @@ import json
 from datetime import UTC, datetime
 from uuid import uuid4
 
+from network import click, has_action, last_with
 from provider_fakes import SEARCH_DAY, dumps
 from uagents_core.contrib.protocols.chat import ChatMessage, TextContent
+
+from resourcepilot import cards
 
 # A distinctive local part, so the safety check below can prove it was never kept.
 EMAIL_USER = "zq-student-7781"
@@ -29,7 +32,7 @@ def completed_roles(network) -> list[str]:
     return [e["details"].get("role") for e in events if e["event_type"] == "specialist_completed"]
 
 
-def rooms_form(domain: str = "purdue.edu", **fields: str) -> dict:
+def rooms_form(domain: str = "purdue.edu", **fields: object) -> dict:
     return {
         "action": "submit_form",
         "service": "rooms",
@@ -68,7 +71,8 @@ async def test_every_reply_is_a_card_and_free_text_gets_the_menu(network) -> Non
     assert network.store.workflows == {}  # a sentence never starts a request
     for service in ("rooms", "wellness", "housing"):
         await network.send_user(chat({"action": "open_service", "service": service}))
-        assert last_card(network, "form")[1]["submit_cta"]["selection"]["service"] == service
+        _, form, _ = last_with(network, "submit_form")
+        assert click(form, "submit_form") == {"action": "submit_form", "service": service}
     await network.send_user(chat({"action": "open_service", "service": "bundle"}))
     assert last_card(network)[1]["root"]["title"] == "ResourcePilot campus services"
     assert len(network.cards()) == len(network.texts())  # no plain-text reply anywhere
@@ -87,6 +91,7 @@ async def test_study_room_flow_ends_in_a_free_booking_link(network) -> None:
     assert [item["title"] for item in carousel["items"]] == ["WALC 3138", "HSSE 2101"]
     assert "Live · LibCal" in [badge["label"] for badge in carousel["items"][0]["badges"]]
     assert recheck_cta(detail)["label"] == "Re-check this room"
+    assert detail["hero_image"] == carousel["items"][0]["image"]  # the same room picture
     await network.send_user(chat(recheck_cta(detail)["selection"]))
     _, receipt, narration = last_card(network, "detail")
     assert receipt["title"] == "Your booking link"
@@ -308,7 +313,8 @@ async def test_housing_shows_each_hall_matched_to_the_criteria(network) -> None:
         by_title["Hillenbrand Hall"]["image"] == "https://housing.purdue.edu/images/hillenbrand.jpg"
     )
     assert "From $4,512 per semester" in by_title["Hillenbrand Hall"]["secondary_text"]
-    assert "image" not in by_title["Meredith South"]  # its photo was off the school's domain
+    # Its photo was off the school's domain, so it shows the default hall picture instead.
+    assert by_title["Meredith South"]["image"] == cards.art("hall-default")
     assert "attacker" not in json.dumps(network.cards())
 
     await network.send_user(chat(carousel["items"][-1]["primary_cta"]["selection"]))
@@ -351,10 +357,19 @@ async def test_non_school_email_is_refused_with_a_card(network) -> None:
 
 
 async def test_specialists_answer_profile_chats(network) -> None:
-    for key in ("intake", "researcher", "campus_rooms", "verification", "planner"):
+    for key in (
+        "intake",
+        "researcher",
+        "campus_rooms",
+        "verification",
+        "planner",
+        "memory_audit",
+        "emergency",
+    ):
         await network.send_user(chat("hello"), to=key)
         kind, payload, _ = last_card(network)
         assert kind == "custom"
+        assert payload["root"]["children"][0]["src"] == cards.art(cards.agent_art(key))
         buttons = [c for c in payload["root"]["children"] if c["type"] == "button"]
         assert buttons[0]["action"]["selection"]["action"] == "open_orchestrator"
 
@@ -427,19 +442,25 @@ async def test_emergency_drill_reviews_then_places_exactly_one_call(network, mon
 
     fake = emergency_setup(network, monkeypatch)
     await network.send_user(chat({"action": "open_service", "service": "emergency"}))
-    assert "never 911" in last_card(network, "form")[1]["title"]
+    _, form, _ = last_with(network, "submit_form")
+    assert click(form, "submit_form") == {"action": "submit_form", "service": "emergency"}
+    assert form["root"]["children"][1]["value"] == cards.DEMO_NOTICE  # before the picture
     await network.send_user(chat(EMERGENCY_FORM))
-    _, review, narration = last_card(network, "review")
+    _, review, narration = last_with(network, "place_call")
     assert completed_roles(network) == ["emergency"]
     assert fake.requests == []  # nothing is dialed before Call now
     assert "never 911" in narration and "0142" in narration
-    assert review["approve_cta"]["label"] == "Call now"
-    await network.send_user(chat(review["approve_cta"]["selection"]))
+    assert cards.card_buttons(review)[0] == (
+        "Call now",
+        {"action": "place_call", "workflow_id": next(iter(network.store.workflows))},
+    )
+    assert cards.DEMO_NOTICE in json.dumps(review, ensure_ascii=False)
+    await network.send_user(chat(click(review, "place_call")))
     _, call, narration = last_card(network, "custom")
     assert call["root"]["title"] == "Demo call" and "speaker" in narration
     (placed,) = outbound(fake)
     assert json.loads(placed.content)["to_number"] == DEMO_NUMBER
-    await network.send_user(chat(review["approve_cta"]["selection"]))  # a second press
+    await network.send_user(chat(click(review, "place_call")))  # a second press
     assert last_card(network, "custom")[1]["root"]["title"] == "Already placed"
     assert len(outbound(fake)) == 1
     check = next(
@@ -461,15 +482,15 @@ async def test_emergency_drill_reviews_then_places_exactly_one_call(network, mon
 async def test_a_lost_demo_call_answer_is_never_retried(network, monkeypatch) -> None:
     fake = emergency_setup(network, monkeypatch)
     await network.send_user(chat(EMERGENCY_FORM))
-    _, review, _ = last_card(network, "review")
+    _, review, _ = last_with(network, "place_call")
     network.set_offline("emergency")
-    await network.send_user(chat(review["approve_cta"]["selection"]))
+    await network.send_user(chat(click(review, "place_call")))
     await network.advance(31)
     await network.advance(31)
     assert any("never retried" in text for text in network.texts())
     assert next(iter(network.store.workflows.values()))["status"] == "failed"
     network.set_offline("emergency", False)
-    await network.send_user(chat(review["approve_cta"]["selection"]))
+    await network.send_user(chat(click(review, "place_call")))
     assert last_card(network, "custom")[1]["root"]["title"] == "Already placed"
     assert outbound(fake) == []
 
@@ -479,4 +500,15 @@ async def test_emergency_without_setup_explains_and_calls_no_one(network, monkey
         monkeypatch.delenv(key, raising=False)
     await network.send_user(chat(EMERGENCY_FORM))
     assert any("not set up yet" in text for text in network.texts())
+    assert not [card for card in network.cards() if has_action(card, "place_call")]
     assert next(iter(network.store.workflows.values()))["status"] == "failed"
+
+
+async def test_a_picture_tile_pick_sent_as_a_one_item_list_is_unwrapped(network) -> None:
+    await network.send_user(chat(rooms_form(window=["afternoon"], duration=["60"])))
+    _, carousel, _ = last_card(network, "carousel")
+    assert [item["title"] for item in carousel["items"]] == ["WALC 3138", "HSSE 2101"]
+    second = carousel["items"][1]
+    await network.send_user(chat(second["primary_cta"]["selection"]))
+    _, detail, _ = last_card(network, "detail")
+    assert detail["hero_image"] == second["image"] == cards.art("room-study-2")

@@ -1,5 +1,7 @@
 # ResourcePilot Campus Researcher
 
+<img src="https://raw.githubusercontent.com/kevinjylin/resourcepilotla/main/assets/avatars/researcher.jpg" alt="ResourcePilot Campus Researcher" width="160">
+
 Works out where a student's own school books study rooms and runs housing, starting only from the
 domain of their school email (the part before `@` is never kept). It matches the domain to a US
 institution in IPEDS, then finds the library's room-booking system. It checks a short hand-verified
@@ -17,8 +19,10 @@ guessed. It never asks about a student's health.
 Every fetch is https only. It is limited to the school's domain or a known booking vendor, refused
 for private addresses, re-checked on each redirect, and capped by a small fetch and time budget.
 Page content is treated as untrusted evidence, never as instructions. From an events feed it keeps
-only a capped title, start time, location, and event link, shown as data and never acted on. It never reads room
-availability, never books anything, and never guesses a booking system.
+only a capped title, start time, location, event link, and photo link (https on the school's
+domain or `localist-images.azureedge.net`), shown as data and never acted on. It never fetches an
+image; only the student's browser loads it. It never reads room availability, never books
+anything, and never guesses a booking system.
 
 Its profile chat shows its role and points to the ResourcePilot Orchestrator.
 

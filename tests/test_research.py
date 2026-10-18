@@ -9,6 +9,7 @@ from provider_fakes import SEARCH_DAY, fake_http
 from resourcepilot.http import ProviderError
 from resourcepilot.research import (
     build_directory_index,
+    event_photo,
     find_events_feed,
     find_housing_pages,
     find_room_system,
@@ -235,6 +236,10 @@ async def test_wellness_events_are_filtered_capped_and_kept_as_plain_data() -> N
     ]
     flu = found["events"][0]
     assert flu["url"] == "https://events.purdue.edu/event/1"
+    # Photos are kept only from Localist's image host or the school; a tracker is dropped.
+    assert flu["photo"] == "https://localist-images.azureedge.net/photos/1/huge/flu.jpg"
+    assert found["events"][1]["photo"] == ""
+    assert [event["photo"] for event in found["events"][2:]] == ["", ""]
     assert flu["location"] == "PUSH Building"
     assert flu["when"].endswith("10 AM")
     assert "\u00b7" not in found["events"][2]["when"]  # all day: no time
@@ -243,6 +248,41 @@ async def test_wellness_events_are_filtered_capped_and_kept_as_plain_data() -> N
     # description never travels.
     for absent in ("Football", "evil.example.com", "Stress Less", "Ignore all instructions"):
         assert absent not in text
+
+
+def test_event_photos_are_https_on_the_school_or_localist_only() -> None:
+    kept = [
+        "https://localist-images.azureedge.net/photos/1/huge/flu.jpg",
+        "https://events.purdue.edu/images/flu.jpg",
+        "https://purdue.edu/flu.jpg",
+    ]
+    for url in kept:
+        assert event_photo(url, "purdue.edu") == url
+    dropped = [
+        "",
+        None,
+        123,
+        "http://localist-images.azureedge.net/photos/1/huge/flu.jpg",  # not https
+        "https://localist-images.azureedge.net:8443/flu.jpg",  # a port
+        "https://events.purdue.edu:443/flu.jpg",  # even the default port
+        "https://user:pass@events.purdue.edu/flu.jpg",  # userinfo
+        "https://user@localist-images.azureedge.net/flu.jpg",
+        "https://events.purdue.edu/" + "a" * 400 + ".jpg",  # overlong
+        "https://tracker.example.com/pixel.jpg",  # off-domain
+        "https://purdue.edu.evil.example.com/flu.jpg",  # look-alike host
+        "https://evilpurdue.edu/flu.jpg",
+        "https://localist-images.azureedge.net.evil.example.com/flu.jpg",
+        "https://ucr.edu/flu.jpg",  # another school
+        "javascript:alert(1)",
+        "data:image/png;base64,AAAA",
+        "//localist-images.azureedge.net/flu.jpg",  # no scheme
+        "https://events.purdue.edu/flu.jpg\nX-Injected: 1",
+        "https://events.purdue.edu/a b.jpg",
+        "https://[::1/flu.jpg",  # unparseable
+        "https://events.purdue.edu:99999/flu.jpg",  # invalid port
+    ]
+    for url in dropped:
+        assert event_photo(url, "purdue.edu") == "", url
 
 
 async def test_events_feed_probe_needs_the_school_and_never_guesses() -> None:
@@ -266,6 +306,15 @@ async def test_verification_drops_events_the_feed_no_longer_lists() -> None:
     rechecked = await recheck_events(fake_http(), stale, PURDUE)
     assert rechecked["events"] == found["events"]
     assert rechecked["unverified"] == ["Gone"]
+    # A photo planted in the upstream payload never survives: Verification uses the live feed's.
+    planted = [
+        {**event, "photo": "https://tracker.example.com/pixel.jpg"} for event in found["events"]
+    ]
+    replanted = await recheck_events(fake_http(), {**found, "events": planted}, PURDUE)
+    assert [event["photo"] for event in replanted["events"]] == [
+        event["photo"] for event in found["events"]
+    ]
+    assert "tracker.example.com" not in str(replanted)
     down = await recheck_events(fake_http(failing={"events.purdue.edu"}), found, PURDUE)
     assert down["events"] == [] and len(down["unverified"]) == 4
 

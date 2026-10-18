@@ -76,19 +76,71 @@ PAYMENT_WORDS = re.compile(
 )
 
 
+HALL = {
+    "option_id": "hall_0123456789",
+    "name": "Earhart",
+    "url": "https://housing.purdue.edu/earhart",
+    "style": "traditional",
+    "who": ["first_year"],
+    "rooms": ["double"],
+    "features": ["ac"],
+    "photo": "",
+}
+PHOTO_HALL = {
+    **HALL,
+    "option_id": "hall_abcdef0123",
+    "name": "Hillenbrand",
+    "photo": "https://housing.purdue.edu/images/hillenbrand.jpg",
+}
+HALLS = {**HOUSING, "halls": [HALL, PHOTO_HALL], "all_halls": [HALL, PHOTO_HALL]}
+PREVIEW = {
+    "to": "\u2022\u2022\u2022\u2022 0142",
+    "opening": "Hello, this is a ResourcePilot demo drill, not a real emergency.",
+    "rows": [("Calling", "Your demo contact (\u2022\u2022\u2022\u2022 0142), not 911")],
+}
+CALL = {"to": "\u2022\u2022\u2022\u2022 0142", "conversation_id": "conv_1"}
+CALL_STATUS = {
+    "status_label": "Call ended",
+    "duration": "1:15",
+    "summary": "Reported a fainting.",
+    "transcript": [{"speaker": "Dispatcher", "message": "What is your location?"}],
+}
+EVENT_PHOTO = "https://localist-images.azureedge.net/photos/1/huge/x.jpg"
+WELLNESS = {
+    "school": {"school_name": "Test U"},
+    "options": [OPTION],
+    "wellness": {
+        "status": "found",
+        "events": [
+            {
+                "title": "Flu clinic",
+                "when": "Mon",
+                "url": "https://events.x.edu/1",
+                "photo": EVENT_PHOTO,
+            },
+            {"title": "Yoga", "when": "Tue", "url": "https://events.x.edu/2", "photo": ""},
+        ],
+    },
+}
+
+
 def _metadata(message):
     return next(item.metadata for item in message.content if isinstance(item, MetadataContent))
 
 
 FACTORIES = [
     (cards.welcome_card, "custom"),
-    (lambda: cards.rooms_form(upcoming_days(NOW)), "form"),
-    (cards.housing_form, "form"),
-    (lambda: cards.service_form("rooms"), "form"),
-    (lambda: cards.service_form("housing"), "form"),
+    (lambda: cards.rooms_form(upcoming_days(NOW)), "custom"),
+    (lambda: cards.wellness_form(upcoming_days(NOW)), "custom"),
+    (cards.housing_form, "custom"),
+    (cards.emergency_form, "custom"),
+    (lambda: cards.service_form("rooms"), "custom"),
+    (lambda: cards.service_form("housing"), "custom"),
     (lambda: cards.room_link_card("workflow-1", "MIT"), "custom"),
     (lambda: cards.progress_card("workflow-1", "researcher", ("intake", "researcher")), "custom"),
     (lambda: cards.progress_card("workflow-1", "recheck"), "custom"),
+    (lambda: cards.progress_card("workflow-1", "call"), "custom"),
+    (lambda: cards.progress_card("workflow-1", "somewhere-new"), "custom"),
     (lambda: cards.rooms_carousel("workflow-1", [OPTION, PAGE_OPTION], "Purdue"), "carousel"),
     (lambda: cards.room_detail("workflow-1", OPTION), "detail"),
     (lambda: cards.room_detail("workflow-1", PAGE_OPTION), "detail"),
@@ -101,7 +153,22 @@ FACTORIES = [
     (lambda: cards.error_card("Something failed", service="rooms"), "custom"),
     (lambda: cards.error_card("Something failed"), "custom"),
     (lambda: cards.notice_card("Saved", "Your link was checked.", badge="Done"), "custom"),
-    (lambda: cards.status_card("Planner", "Ranks open rooms", "agent1qorch"), "custom"),
+    (
+        lambda: cards.status_card(
+            "Planner", "Ranks open rooms", "agent1qorch", image=cards.agent_art("planner")
+        ),
+        "custom",
+    ),
+    (lambda: cards.room_detail("workflow-1", OPTION, wellness=True), "detail"),
+    (lambda: cards.housing_carousel("workflow-1", HALLS), "carousel"),
+    (lambda: cards.housing_detail("workflow-1", HALL, HALLS), "detail"),
+    (lambda: cards.housing_detail("workflow-1", PHOTO_HALL, HALLS), "detail"),
+    (lambda: cards.no_housing_match_card("workflow-1", HALLS), "custom"),
+    (lambda: cards.wellness_card("workflow-1", {"school": {"school_name": "Test U"}}), "custom"),
+    (lambda: cards.wellness_card("workflow-1", WELLNESS), "custom"),
+    (lambda: cards.emergency_review_card("workflow-1", PREVIEW), "custom"),
+    (lambda: cards.emergency_call_card("workflow-1", CALL), "custom"),
+    (lambda: cards.emergency_call_card("workflow-1", CALL, CALL_STATUS), "custom"),
 ]
 
 
@@ -170,6 +237,24 @@ def test_terminal_flag_is_a_string() -> None:
 
 
 @pytest.mark.parametrize(
+    "factory",
+    [
+        cards.rooms_form,
+        cards.wellness_form,
+        cards.housing_form,
+        cards.emergency_form,
+        lambda: cards.room_link_card("workflow-1", "MIT"),
+        lambda: cards.emergency_review_card("workflow-1", PREVIEW),
+        lambda: ("form", {"title": "x", "fields": [], "submit_cta": {"label": "Go"}}),
+    ],
+)
+def test_a_card_that_expects_input_is_never_terminal(factory) -> None:
+    kind, payload = factory()
+    with pytest.raises(ValueError, match="never be terminal"):
+        cards.card_message("x", kind, payload, terminal=True)
+
+
+@pytest.mark.parametrize(
     ("kind", "payload", "message"),
     [
         ("carousel", {"title": "x", "items": [], "style": "dense"}, "carousel card"),
@@ -234,20 +319,33 @@ def test_services_menu_offers_four_services_and_bookings() -> None:
 @pytest.mark.parametrize("service", ["rooms", "wellness", "housing", "emergency"])
 def test_every_form_submits_its_own_service(service) -> None:
     _, form = cards.service_form(service)
-    for field in form["fields"]:
+    fields = cards.card_inputs(form)
+    assert fields and all(field["type"] == "input" for field in fields)
+    for field in fields:
         if field["kind"] == "select":
             assert field["options"]
-    assert form["submit_cta"]["selection"] == {"action": "submit_form", "service": service}
-    email = [field for field in form["fields"] if field["name"] == "email"]
+    assert cards.card_buttons(form) == [
+        (form_label(service), {"action": "submit_form", "service": service})
+    ]
+    email = [field for field in fields if field["name"] == "email"]
     # The demo drill needs no school email, and no form ever asks for a phone number.
     assert len(email) == (0 if service == "emergency" else 1)
-    assert not [field for field in form["fields"] if "phone" in field["name"]]
+    assert not [field for field in fields if "phone" in field["name"]]
     assert all(field["required"] is True for field in email)
+
+
+def form_label(service: str) -> str:
+    return {
+        "rooms": "Find open rooms",
+        "wellness": "Find rooms and events",
+        "housing": "Find housing",
+        "emergency": "Review the demo call",
+    }[service]
 
 
 def test_rooms_form_offers_days_windows_durations_and_group_size() -> None:
     _, form = cards.rooms_form(upcoming_days(NOW))
-    fields = {field["name"]: field for field in form["fields"]}
+    fields = {field["name"]: field for field in cards.card_inputs(form)}
     assert list(fields) == ["email", "day", "window", "duration", "group_size"]
     assert fields["day"]["options"][0] == {"value": "2026-10-21", "label": "Today"}
     assert [option["value"] for option in fields["window"]["options"]] == [
@@ -377,7 +475,8 @@ def test_progress_card_marks_finished_and_current_stages() -> None:
     assert {"recheck", "link"} <= set(cards.STAGE_LABELS)
     assert all(len(label) <= 24 for label in cards.STAGE_LABELS.values())
     _, card = cards.progress_card("workflow-123456789", "verification", chain)
-    children = card["root"]["children"]
+    assert card["root"]["children"][0]["src"] == cards.art("role-verification")
+    children = card["root"]["children"][1:]
     assert children[0] == {"type": "badge", "label": "Verifying every result", "variant": "info"}
     steps = children[1]["value"].splitlines()
     assert steps == [
@@ -391,8 +490,9 @@ def test_progress_card_marks_finished_and_current_stages() -> None:
         {"action": "show_status", "workflow_id": "workflow-123456789"}
     ]
     _, recheck = cards.progress_card("workflow-1", "recheck")
-    assert recheck["root"]["children"][0]["label"] == "Re-checking your room"
-    assert len(recheck["root"]["children"]) == 3  # no step list outside a chain
+    assert recheck["root"]["children"][0]["src"] == cards.art("role-campus-rooms")
+    assert recheck["root"]["children"][1]["label"] == "Re-checking your room"
+    assert len(recheck["root"]["children"]) == 4  # picture, badge, workflow, button: no steps
 
 
 def test_known_actions_cover_the_room_and_demo_call_flows_only() -> None:
@@ -490,8 +590,12 @@ def test_wellness_card_always_carries_the_crisis_line() -> None:
     assert "No public room-booking system found for Test U" in encoded
     assert "No public events calendar found for Test U" in encoded
     _, form = cards.wellness_form()
-    assert cards.CRISIS_TEXT in form["title"]
-    assert {field["name"] for field in form["fields"]} == {"email", "day", "window", "duration"}
+    children = form["root"]["children"]
+    assert children[0]["label"] == "Crisis help · 24/7"
+    assert children[1]["value"] == cards.CRISIS_TEXT  # before the picture
+    assert children[2]["src"] == cards.art("svc-wellness")
+    names = {field["name"] for field in cards.card_inputs(form)}
+    assert names == {"email", "day", "window", "duration"}
 
 
 def test_wellness_card_rooms_use_stable_option_ids() -> None:
@@ -512,30 +616,20 @@ def test_wellness_prose_only_opens_the_form() -> None:
         assert cards.parse_selection(text) == {"action": "open_service", "service": "wellness"}
 
 
-PREVIEW = {
-    "to": "\u2022\u2022\u2022\u2022 0142",
-    "opening": "Hello, this is a ResourcePilot demo drill, not a real emergency.",
-    "rows": [("Calling", "Your demo contact (\u2022\u2022\u2022\u2022 0142), not 911")],
-}
-
-
 def test_emergency_cards_say_not_911_and_only_a_button_places_the_call() -> None:
     _, form = cards.emergency_form()
-    assert "never 911" in form["title"]
+    assert form["root"]["children"][1]["value"] == cards.DEMO_NOTICE  # before the picture
+    assert "never 911" in json.dumps(form)
     kind, review = cards.emergency_review_card("wf-9", PREVIEW)
     cards.card_message("x", kind, review)
-    assert review["approve_cta"]["selection"] == {"action": "place_call", "workflow_id": "wf-9"}
+    assert cards.card_buttons(review) == [
+        ("Call now", {"action": "place_call", "workflow_id": "wf-9"}),
+        ("Cancel", {"action": "start_over"}),
+    ]
     assert "never 911" in json.dumps(review, ensure_ascii=False)
-    call = {"to": "\u2022\u2022\u2022\u2022 0142", "conversation_id": "conv_1"}
-    status = {
-        "status_label": "Call ended",
-        "duration": "1:15",
-        "summary": "Reported a fainting.",
-        "transcript": [{"speaker": "Dispatcher", "message": "What is your location?"}],
-    }
     for payload in (
-        cards.emergency_call_card("wf-9", call),
-        cards.emergency_call_card("wf-9", call, status),
+        cards.emergency_call_card("wf-9", CALL),
+        cards.emergency_call_card("wf-9", CALL, CALL_STATUS),
     ):
         kind, card = payload
         cards.card_message("x", kind, card)
@@ -544,3 +638,154 @@ def test_emergency_cards_say_not_911_and_only_a_button_places_the_call() -> None
     assert "What is your location?" in encoded
     for text in ("call now", "place the call", "emergency call 911 now"):
         assert cards.parse_selection(text).get("action") != "place_call"
+
+
+def _image_urls(node) -> list[str]:
+    urls = []
+    if isinstance(node, dict):
+        for key in ("src", "image", "hero_image"):
+            if isinstance(node.get(key), str):
+                urls.append(node[key])
+        for value in node.values():
+            urls.extend(_image_urls(value))
+    elif isinstance(node, list):
+        for value in node:
+            urls.extend(_image_urls(value))
+    return urls
+
+
+# Pictures a card may show that are not ResourcePilot's own art: a school's own hall or event photo.
+OWN_PHOTOS = {PHOTO_HALL["photo"], EVENT_PHOTO}
+
+
+def test_art_names_match_the_contract() -> None:
+    from resourcepilot.config import ALL_AGENTS
+
+    roles = {cards.agent_art(identity.key) for identity in ALL_AGENTS}
+    assert roles == {name for name in cards.ART if name.startswith("role-")}
+    assert len(roles) == 8
+    assert set(cards.STAGE_ART.values()) <= cards.ART
+    assert set(cards.STAGE_ART) <= set(cards.STAGE_LABELS)
+    with pytest.raises(KeyError):
+        cards.art("cat-camera")
+    with pytest.raises(KeyError):
+        cards.agent_art("fulfillment")
+
+
+def test_every_art_name_has_a_committed_image_and_every_agent_an_avatar() -> None:
+    # The images are generated from assets/src by the art script and committed with the code.
+    from resourcepilot.config import ALL_AGENTS
+
+    for name in cards.ART:
+        assert (ROOT / "assets" / "cards" / f"{name}.jpg").is_file(), name
+    for identity in ALL_AGENTS:
+        assert (ROOT / "assets" / "avatars" / f"{identity.key}.jpg").is_file(), identity.key
+
+
+@pytest.mark.parametrize("key", ["orchestrator", "intake", "campus_rooms", "memory_audit"])
+def test_agent_art_names_each_role(key) -> None:
+    assert cards.agent_art(key) == f"role-{key.replace('_', '-')}"
+
+
+@pytest.mark.parametrize(("factory", "kind"), FACTORIES)
+def test_every_card_has_a_picture_from_the_repository(factory, kind, monkeypatch) -> None:
+    monkeypatch.delenv("CARD_IMAGE_BASE", raising=False)
+    _, payload = factory()
+    urls = _image_urls(payload)
+    assert urls, "every card carries at least one image"
+    for url in set(urls) - OWN_PHOTOS:
+        assert url.startswith(cards.DEFAULT_IMAGE_BASE + "cards/"), url
+        assert url.rsplit("/", 1)[1].removesuffix(".jpg") in cards.ART, url
+
+
+@pytest.mark.parametrize("base", ["", "http://example.com/assets/", "   "])
+@pytest.mark.parametrize(("factory", "kind"), FACTORIES)
+def test_cards_stay_valid_with_images_turned_off(factory, kind, base, monkeypatch) -> None:
+    monkeypatch.setenv("CARD_IMAGE_BASE", base)
+    actual_kind, payload = factory()
+    assert actual_kind == kind
+    cards.card_message("x", actual_kind, payload)
+    # Only a hall's own photo can remain; it is the school's, not ResourcePilot's art.
+    assert set(_image_urls(payload)) <= {PHOTO_HALL["photo"]}
+
+
+def test_image_base_can_move_to_another_https_host(monkeypatch) -> None:
+    monkeypatch.setenv("CARD_IMAGE_BASE", "https://cdn.example.org/rp")
+    assert cards.art("hero-info") == "https://cdn.example.org/rp/cards/hero-info.jpg"
+
+
+def test_menu_is_a_picture_grid_with_my_bookings_and_the_crisis_line() -> None:
+    _, menu = cards.welcome_card()
+    children = menu["root"]["children"]
+    assert children[0]["src"] == cards.art("menu-banner")
+    rows = [child for child in children if child.get("direction") == "row"]
+    assert [len(row["children"]) for row in rows] == [2, 2, 1]
+    tiles = [tile for row in rows for tile in row["children"]]
+    assert [tile["children"][0]["src"] for tile in tiles] == [
+        cards.art(f"svc-{name}")
+        for name in ("rooms", "wellness", "housing", "emergency", "bookings")
+    ]
+    assert [selection for _, selection in cards.card_buttons(menu)][-1] == {
+        "action": "show_bookings"
+    }
+    assert children[-1]["value"] == cards.CRISIS_TEXT
+
+
+def test_event_photos_come_from_the_feed_and_fall_back_to_art() -> None:
+    _, card = cards.wellness_card("workflow-1", WELLNESS)
+    urls = _image_urls(card)
+    assert EVENT_PHOTO in urls
+    assert cards.art("event-default") in urls
+    assert cards.art("wellness-hero") in urls
+    assert cards.art("room-wellness") in urls
+    encoded = json.dumps(card, ensure_ascii=False)
+    assert encoded.index(cards.CRISIS_TEXT) < encoded.index("wellness-hero")
+    unsafe = {**WELLNESS["wellness"]["events"][0], "photo": "http://x.edu/a.jpg"}
+    _, card = cards.wellness_card(
+        "workflow-1", {**WELLNESS, "wellness": {"status": "found", "events": [unsafe]}}
+    )
+    assert "http://x.edu/a.jpg" not in _image_urls(card)
+
+
+def test_halls_show_their_own_photo_else_the_default_hall() -> None:
+    _, carousel = cards.housing_carousel("workflow-1", HALLS)
+    images = {item["id"]: item.get("image") for item in carousel["items"]}
+    assert images[HALL["option_id"]] == cards.art("hall-default")
+    assert images[PHOTO_HALL["option_id"]] == PHOTO_HALL["photo"]
+    _, plain = cards.housing_detail("workflow-1", HALL, HALLS)
+    assert plain["hero_image"] == cards.art("hall-default")
+    _, photo = cards.housing_detail("workflow-1", PHOTO_HALL, HALLS)
+    assert photo["hero_image"] == PHOTO_HALL["photo"]
+
+
+def test_room_detail_shows_its_carousel_picture() -> None:
+    _, carousel = cards.rooms_carousel("workflow-1", [OPTION, PAGE_OPTION], "Purdue")
+    for index, item in enumerate(carousel["items"]):
+        option = [OPTION, PAGE_OPTION][index]
+        _, detail = cards.room_detail("workflow-1", option, index=index)
+        assert detail["hero_image"] == item["image"]
+    _, wellness = cards.room_detail("workflow-1", OPTION, wellness=True)
+    assert wellness["hero_image"] == cards.art("room-wellness")
+    _, receipt = cards.room_link_receipt(OPTION)
+    assert receipt["hero_image"] == cards.art("hero-receipt")
+
+
+def test_emergency_cards_keep_every_disclaimer_with_pictures() -> None:
+    for _, card in (
+        cards.emergency_form(),
+        cards.emergency_review_card("wf-9", PREVIEW),
+        cards.emergency_call_card("wf-9", CALL),
+        cards.emergency_call_card("wf-9", CALL, CALL_STATUS),
+    ):
+        children = card["root"]["children"]
+        assert children[0] == {
+            "type": "badge",
+            "label": "Demo drill · not 911",
+            "variant": "warning",
+        }
+        assert children[1]["value"] == cards.DEMO_NOTICE
+        assert "In a real emergency, call 911." in children[1]["value"]
+        encoded = json.dumps(card, ensure_ascii=False)
+        assert not re.search(r"\d{5,}", encoded)  # never more than the last four digits
+    _, review = cards.emergency_review_card("wf-9", PREVIEW)
+    assert cards.art("hero-call") in _image_urls(review)

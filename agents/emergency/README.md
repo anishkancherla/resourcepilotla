@@ -1,5 +1,7 @@
 # ResourcePilot Emergency Dispatch
 
+<img src="https://raw.githubusercontent.com/kevinjylin/resourcepilotla/main/assets/avatars/emergency.jpg" alt="ResourcePilot Emergency Dispatch" width="160">
+
 Runs the emergency **demo drill**. A student picks **Emergency (demo)** in the ResourcePilot
 Orchestrator's menu and fills in a short form: what kind of emergency (medical, fire or smoke,
 someone in danger, or other), where on campus, how many people need help, optional details,

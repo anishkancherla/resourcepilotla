@@ -95,8 +95,14 @@ ElevenLabs API (section 6). The web page rules:
   mistaken for yours. The same holds for a `<school>.localist.com` calendar.
 - **Events feeds.** From a Localist feed the Researcher keeps only an event's title (80
   characters, tags and control characters stripped), start time, location (60 characters), and
-  its calendar link, which must pass the same host rules. Descriptions are never read or shown.
-  These fields are display data and never instructions.
+  its calendar link, which must pass the same host rules, plus a photo link. Descriptions are
+  never read or shown. These fields are display data and never instructions.
+- **Images.** Card art is served from this repository's `assets/` over https (`CARD_IMAGE_BASE`),
+  and the student's browser loads it. A wellness event's photo is passed through only when it is
+  https on the school's domain or Localist's image host (`localist-images.azureedge.net`), with no
+  port or user info and at most 400 characters. A hall's photo is already limited to an
+  `og:image` on the school's domain. ResourcePilot never fetches an image itself, so a photo
+  cannot reach an internal address through the agents.
 - **Health.** The wellness form asks only for the school email, a day, and a duration. Nothing
   about a student's health is asked, stored, or logged, and ResourcePilot books no health or
   counseling appointments. The 988 and 911 crisis line is static text on every wellness card and

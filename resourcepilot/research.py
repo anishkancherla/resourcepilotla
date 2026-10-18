@@ -67,6 +67,9 @@ VENDORS: dict[str, str] = {
 }
 HOUSING_VENDORS = ("starrezhousing.com", "starrez.com")
 EVENT_VENDORS = ("localist.com",)
+# Event photos are shown by the student's browser, never fetched by ResourcePilot.
+EVENT_IMAGE_HOSTS = ("localist-images.azureedge.net",)
+MAX_PHOTO_URL = 400
 EVENT_HOSTS = ("events.{d}", "calendar.{d}")
 LOCALIST_EVENTS = "/api/2/events"
 EVENT_DAYS = 7
@@ -860,6 +863,28 @@ def _filter_names(filters: Any) -> list[str]:
     return names
 
 
+def event_photo(value: Any, domain: str) -> str:
+    """An event's photo URL if it is plain https on the school or Localist's image host, else ""."""
+    url = str(value or "")
+    if (
+        not url
+        or len(url) > MAX_PHOTO_URL
+        or CONTROL_RE.search(url)
+        or any(c.isspace() for c in url)
+    ):
+        return ""
+    try:
+        parts = urlsplit(url)
+        port = parts.port
+    except ValueError:
+        return ""
+    host = str(parts.hostname or "")
+    allowed = on_domain(host, domain) or any(on_domain(host, h) for h in EVENT_IMAGE_HOSTS)
+    if parts.scheme != "https" or port is not None or "@" in parts.netloc or not allowed:
+        return ""
+    return url
+
+
 def wellness_event(raw: Any, domain: str, zone: ZoneInfo, first_day: date) -> dict[str, str] | None:
     """One health or wellness event from a Localist feed item, or None."""
     event = raw.get("event") if isinstance(raw, dict) else None
@@ -892,6 +917,7 @@ def wellness_event(raw: Any, domain: str, zone: ZoneInfo, first_day: date) -> di
         when += f" \u00b7 {start:%-I:%M %p}".replace(":00", "")
     return {
         "event_id": _plain(event.get("id"), 20),
+        "photo": event_photo(event.get("photo_url"), domain),
         "title": title,
         "starts_at": start.isoformat(),
         "when": when,
@@ -931,7 +957,7 @@ async def wellness_research(http: Http, school: dict[str, str], day: str) -> dic
     out: dict[str, Any] = {**feed, "day": day, "events": []}
     if feed["status"] != "found":
         return out
-    cache_key = f"research:events-list:{feed['feed_host']}:{day}:v1"
+    cache_key = f"research:events-list:{feed['feed_host']}:{day}:v2"
     if http.cache is not None:
         cached = await http.cache.cache_get(cache_key)
         if isinstance(cached, list):
@@ -950,7 +976,10 @@ async def wellness_research(http: Http, school: dict[str, str], day: str) -> dic
 async def recheck_events(
     http: Http, wellness: dict[str, Any], school: dict[str, str]
 ) -> dict[str, Any]:
-    """Verification's independent re-fetch of the feed: keep only events it still lists."""
+    """Verification's independent re-fetch of the feed: keep only events it still lists.
+
+    A kept event's photo comes from the live feed, vetted again, never from the upstream payload.
+    """
     events = list(wellness.get("events") or [])
     if not events or not wellness.get("feed_host"):
         return {**wellness, "unverified": []}
@@ -964,8 +993,13 @@ async def recheck_events(
         )
     except ProviderError:
         live = []
-    still = {event["url"] for event in live}
-    kept = [event for event in events if event.get("url") in still]
+    still = {event["url"]: event for event in live}
+    domain = school["domain"]
+    kept = [
+        {**event, "photo": event_photo(still[event["url"]].get("photo"), domain)}
+        for event in events
+        if event.get("url") in still
+    ]
     dropped = [str(event.get("title", "")) for event in events if event.get("url") not in still]
     return {**wellness, "events": kept, "unverified": dropped}
 

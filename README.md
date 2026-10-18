@@ -39,6 +39,31 @@ school's booking link: **you book it with your own sign-in**. ResourcePilot neve
 
 This repository uses public Fetch.ai packages and documentation only.
 
+## What it looks like
+
+![ResourcePilot campus services](assets/cards/menu-banner.jpg)
+
+Every reply in ASI:One is a picture card:
+
+- The menu is a banner and a grid of picture tiles, one per service, like the Welcome Week hubs.
+- Each form has a picture of its service. The wellness form keeps the 988 crisis line first, and
+  the emergency form keeps its demo-drill notice first.
+- Progress cards show the agent at work, with each specialist's own art.
+- The rooms carousel shows a picture for each open study or wellness room, and the room's detail,
+  booking-link, and receipt cards have their own art.
+- The housing carousel shows each hall with the school's own photo of it, and a residence-hall
+  picture when the school has none.
+- The wellness card shows its open rooms and each event with the event's own photo from the
+  school's calendar, or a default picture.
+- The emergency review and call cards show a demo-drill phone call, never police or ambulance
+  imagery, and still say they do not contact 911 or campus police.
+
+The art is drawn in code by `scripts/make_card_art.py` and served from this public repository; the
+student's browser loads it, and ResourcePilot never fetches an image itself.
+[assets/PROMPTS.md](assets/PROMPTS.md) has an image prompt for each picture, so you can swap in
+generated art under the same file names. Point `CARD_IMAGE_BASE` at your fork, or leave it empty to
+send cards without images.
+
 ## Start here
 
 Prerequisites: Docker Desktop, Python 3.11–3.13, and
@@ -144,7 +169,7 @@ The Campus Researcher reads only public pages over https, on your school's domai
 booking, housing, or events vendor (Localist). It checks that every address it connects to is
 public, vets every redirect, and stops after a small fetch and time budget. Page text is treated
 as evidence, never as instructions. From an events feed it keeps only a capped title, time,
-location, and link. Campus Rooms reads only a LibCal host on the school's own domain or `libcal.com`.
+location, link, and an https photo link on the school's domain or Localist's image host. Campus Rooms reads only a LibCal host on the school's own domain or `libcal.com`.
 See [docs/trust-model.md](docs/trust-model.md).
 
 The emergency call is a demo drill. The Emergency Dispatcher dials only the number in
@@ -167,6 +192,7 @@ make build              # build the Docker image
 make stop
 ```
 
+`uv run python scripts/make_card_art.py` redraws the card art and agent avatars (it needs Chrome).
 `uv run python scripts/print_cards.py` prints every card payload, validated exactly as the agents
 send it. Pass a school domain, such as `purdue.edu`, to also run the real Researcher and Campus
 Rooms logic against public pages, including the wellness card's rooms and events. It needs no keys

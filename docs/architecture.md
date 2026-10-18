@@ -31,6 +31,14 @@ The Orchestrator answers every chat with a card. A greeting or any free text get
 menu; there is no sentence parser. Each menu button opens a form, and each form submission starts
 a workflow for one service.
 
+Every card carries a picture: art from this repository's `assets/cards`, chosen in
+[resourcepilot/cards.py](../resourcepilot/cards.py) by `cards.art()` and, for each specialist's
+progress and status cards, `cards.agent_art()`. Housing halls use the school's own `og:image`
+photo, and wellness events use the event's own photo, with the repository art as the fallback.
+Image URLs are built from `CARD_IMAGE_BASE` and are always https; with it empty, every card is
+sent without images and stays valid. Forms and the emergency review are custom cards, because the
+predefined kinds cannot show images, and keep the same field names and selections.
+
 | Service | Specialist chain | Ends with |
 | --- | --- | --- |
 | `rooms` | Intake → Campus Researcher → Campus Rooms → Verification → Planner | A rooms carousel, then the re-check and a booking link |
@@ -107,7 +115,8 @@ optional on the wellness card. It also looks for the school's public Localist ca
 `events.<domain>/api/2/events`, then `calendar.<domain>`, then `<school>.localist.com` (accepted
 only when its home page links back to the school). It keeps up to eight events in the next seven
 days whose title, keywords, tags, or filter names read as health or wellness, with only a capped
-title, start time, location, and link. A missing or failing feed is shown on the card, never a
+title, start time, location, link, and photo link (https on the school's domain or
+`localist-images.azureedge.net`, else empty). A missing or failing feed is shown on the card, never a
 failed request.
 
 Results are cached per domain in `api_cache`: a week when found, a day otherwise. A week's event

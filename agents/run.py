@@ -208,7 +208,12 @@ async def handle_chat(ctx: Context, sender: str, message: ChatMessage) -> None:
             ctx,
             sender,
             f"I am the {ROLE.name}. {ROLE.responsibility}. Chat with the Orchestrator to start.",
-            cards.status_card(ROLE.name, ROLE.responsibility, ADDRESSES["orchestrator"]),
+            cards.status_card(
+                ROLE.name,
+                ROLE.responsibility,
+                ADDRESSES["orchestrator"],
+                image=cards.agent_art(ROLE.key),
+            ),
         )
         return
     await _orchestrator_chat(ctx, sender, text, cards.parse_selection(text))
@@ -228,13 +233,18 @@ FIELD_LIMIT = 200
 
 
 def _form_fields(selection: dict[str, Any]) -> dict[str, Any]:
-    """Bounded scalar fields from a form submission, with any email reduced to its domain."""
-    fields = {
-        str(key)[:40]: str(value)[:FIELD_LIMIT] if isinstance(value, str) else value
-        for key, value in selection.items()
-        if key not in {"action", "selection", "service"}
-        and isinstance(value, str | int | float | bool)
-    }
+    """Bounded scalar fields from a form submission, with any email reduced to its domain.
+
+    A picture-tile pick (``choice_grid``) may arrive as a one-item list; it is unwrapped.
+    """
+    fields: dict[str, Any] = {}
+    for key, raw in selection.items():
+        value = raw[0] if isinstance(raw, list) and len(raw) == 1 else raw
+        if key in {"action", "selection", "service"} or not isinstance(
+            value, str | int | float | bool
+        ):
+            continue
+        fields[str(key)[:40]] = str(value)[:FIELD_LIMIT] if isinstance(value, str) else value
     return scrub_fields(fields)
 
 
@@ -306,6 +316,15 @@ async def _orchestrator_chat(
         )
         return
     await _workflow_action(ctx, sender, action, selection, state)
+
+
+def _option_index(state: dict[str, Any], option_id: str) -> int:
+    """The option's place in the rooms carousel, so its detail shows the same picture."""
+    options = state.get("data", {}).get("options", [])
+    return next(
+        (index for index, option in enumerate(options) if option.get("option_id") == option_id),
+        0,
+    )
 
 
 def _option(state: dict[str, Any], option_id: str) -> dict[str, Any] | None:
@@ -430,7 +449,12 @@ async def _workflow_action(
             ctx,
             sender,
             f"{option['lines'][0]['name']}: free, re-checked live before you book.",
-            cards.room_detail(workflow_id, option, wellness=_wellness(state)),
+            cards.room_detail(
+                workflow_id,
+                option,
+                wellness=_wellness(state),
+                index=_option_index(state, str(option["option_id"])),
+            ),
         )
         return
     if action == "recheck_room" and option:

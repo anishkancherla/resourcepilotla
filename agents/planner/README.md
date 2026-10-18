@@ -1,5 +1,7 @@
 # ResourcePilot Planner
 
+<img src="https://raw.githubusercontent.com/kevinjylin/resourcepilotla/main/assets/avatars/planner.jpg" alt="ResourcePilot Planner" width="160">
+
 Ranks the verified open study rooms into up to six options: earliest opening first, then the
 snuggest fit for the group. The first option is labeled "Earliest opening". Each option has a
 stable ID made from the room and its start time, so a button press always names the same room and

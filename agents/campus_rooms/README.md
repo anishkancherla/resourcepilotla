@@ -1,5 +1,7 @@
 # ResourcePilot Campus Rooms
 
+<img src="https://raw.githubusercontent.com/kevinjylin/resourcepilotla/main/assets/avatars/campus_rooms.jpg" alt="ResourcePilot Campus Rooms" width="160">
+
 Reads real open library study rooms at the student's own school, at any school whose room system
 the Campus Researcher found. It is the only ResourcePilot agent that reads room availability.
 

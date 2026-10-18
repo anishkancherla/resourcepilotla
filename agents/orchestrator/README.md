@@ -1,5 +1,7 @@
 # ResourcePilot Orchestrator
 
+<img src="https://raw.githubusercontent.com/kevinjylin/resourcepilotla/main/assets/avatars/orchestrator.jpg" alt="ResourcePilot Orchestrator" width="160">
+
 The ASI:One entrypoint for ResourcePilot: campus help for a student's first weeks, at any US
 school. Everything runs on buttons and short forms, and every reply is a card.
 

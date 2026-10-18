@@ -40,6 +40,9 @@ The track rewards agents that keep running after the event. To get there:
 - Allow outbound https. The Campus Researcher, Campus Rooms, and Verification read IPEDS (the
   Urban Institute Education Data API), schools' websites, and LibCal. They need no API keys. The
   Emergency Dispatcher calls the ElevenLabs API and needs `ELEVENLABS_API_KEY`.
+- Card pictures load in the student's browser from `CARD_IMAGE_BASE`, this repository's
+  `assets/` by default. If you deploy from a fork, push `assets/` and point it there, or leave it
+  empty to send cards without images.
 - Use managed Postgres with backups, and point `DATABASE_URL` at it.
 - Re-open every profile after deploying, then test a chat, a study-room search through the
   re-check, a housing lookup, and **My bookings**.
